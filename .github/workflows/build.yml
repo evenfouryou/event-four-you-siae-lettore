@@ -23,28 +23,28 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Build SiaeBridge
+      - name: Build SiaeBridge (32-bit)
         working-directory: desktop-app/SiaeBridge
         run: |
           dotnet restore
-          dotnet publish -c Release -r win-x86 --self-contained true
+          dotnet publish -c Release -r win-x86 --self-contained true -p:PublishSingleFile=false
+          echo "=== Output files ==="
           dir bin\Release\net8.0-windows\win-x86\publish\
 
       - name: Copy libSIAE.dll
         shell: pwsh
         run: |
           $out = "desktop-app/SiaeBridge/bin/Release/net8.0-windows/win-x86/publish"
-          $dll = "desktop-app/SiaeBridge/prebuilt/libSIAE.dll"
-          Copy-Item $dll "$out/libSIAE.dll" -Force
-          Write-Host "Files:"
-          Get-ChildItem $out -Filter "*.dll" | Format-Table Name, Length
-          Get-ChildItem $out -Filter "*.exe" | Format-Table Name, Length
+          Copy-Item "desktop-app/SiaeBridge/prebuilt/libSIAE.dll" "$out/libSIAE.dll" -Force
+          
+          echo "=== Final files ==="
+          Get-ChildItem $out | Where-Object { $_.Name -match '\.(exe|dll)$' -and $_.Name -notmatch '^api-|^clr' } | Format-Table Name, Length
 
-      - name: Update package.json path
+      - name: Fix package.json path
         shell: pwsh
         run: |
           $pkg = Get-Content "desktop-app/package.json" -Raw
-          $pkg = $pkg -replace 'net8.0-windows/win-x86"', 'net8.0-windows/win-x86/publish"'
+          $pkg = $pkg -replace 'win-x86"', 'win-x86/publish"'
           Set-Content "desktop-app/package.json" $pkg
 
       - name: Install Node
