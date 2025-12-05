@@ -16,7 +16,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '6.0.x'
+          dotnet-version: '8.0.x'
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -27,29 +27,25 @@ jobs:
         working-directory: desktop-app/SiaeBridge
         run: |
           dotnet restore
-          dotnet build -c Release
-          dir bin\Release\net472\
+          dotnet publish -c Release -r win-x86 --self-contained true
+          dir bin\Release\net8.0-windows\win-x86\publish\
 
       - name: Copy libSIAE.dll
         shell: pwsh
         run: |
-          $out = "desktop-app/SiaeBridge/bin/Release/net472"
-          
-          if (-not (Test-Path $out)) {
-            New-Item -ItemType Directory -Path $out -Force
-          }
-          
+          $out = "desktop-app/SiaeBridge/bin/Release/net8.0-windows/win-x86/publish"
           $dll = "desktop-app/SiaeBridge/prebuilt/libSIAE.dll"
-          if (Test-Path $dll) {
-            Copy-Item $dll "$out/libSIAE.dll" -Force
-            Write-Host "✓ Copied libSIAE.dll"
-          } else {
-            Write-Host "ERROR: libSIAE.dll not found at $dll"
-            Get-ChildItem "desktop-app/SiaeBridge" -Recurse
-            exit 1
-          }
-          
-          Get-ChildItem $out
+          Copy-Item $dll "$out/libSIAE.dll" -Force
+          Write-Host "Files:"
+          Get-ChildItem $out -Filter "*.dll" | Format-Table Name, Length
+          Get-ChildItem $out -Filter "*.exe" | Format-Table Name, Length
+
+      - name: Update package.json path
+        shell: pwsh
+        run: |
+          $pkg = Get-Content "desktop-app/package.json" -Raw
+          $pkg = $pkg -replace 'net8.0-windows/win-x86"', 'net8.0-windows/win-x86/publish"'
+          Set-Content "desktop-app/package.json" $pkg
 
       - name: Install Node
         working-directory: desktop-app
