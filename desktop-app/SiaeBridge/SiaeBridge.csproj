@@ -4,17 +4,17 @@
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
-    <SelfContained>false</SelfContained>
+
+    <!-- IMPORTANTISSIMO -->
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+
     <PlatformTarget>x86</PlatformTarget>
     <Nullable>disable</Nullable>
     <AssemblyName>SiaeBridge</AssemblyName>
     <RootNamespace>SiaeBridge</RootNamespace>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
-
-    <!-- FIX CRITICO -->
-    <PublishSingleFile>false</PublishSingleFile>
-    <PublishTrimmed>false</PublishTrimmed>
-    <DebugType>portable</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
