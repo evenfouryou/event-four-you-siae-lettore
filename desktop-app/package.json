@@ -1,59 +1,55 @@
 {
-  "name": "event-four-you-siae-lettore",
-  "version": "1.0.1",
-  "description": "Event Four You - SIAE Lettore per smart card MiniLector EVO V3",
-  "main": "main.js",
-  "author": "Event Four You",
-  "license": "MIT",
+  "name": "efy-siae-reader",
+  "version": "1.0.0",
+  "description": "Event Four You SIAE Card Reader",
+  "main": "index.js",
+  "author": "Hureax Srl",
+  "license": "ISC",
+
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win",
-    "postinstall": "electron-builder install-app-deps"
+    "build": "electron-builder"
   },
+
   "dependencies": {
-    "electron-log": "^5.0.0"
+    "electron-log": "^5.0.0",
+    "node-addon-api": "^7.0.0"
   },
+
   "devDependencies": {
-    "electron": "^28.0.0",
+    "electron": "^28.2.0",
     "electron-builder": "^24.9.1"
   },
+
   "build": {
-    "appId": "com.eventfouryou.siae-lettore",
-    "productName": "Event Four You SIAE Lettore",
-    "copyright": "Copyright © 2024 Event Four You",
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": ["x64"]
-        }
-      ],
-      "icon": "icon.ico",
-      "publisherName": "Event Four You"
+    "appId": "com.eventfouryou.siaereader",
+    "productName": "EFY SIAE Reader",
+
+    "directories": {
+      "output": "dist"
     },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "SIAE Lettore"
-    },
+
     "files": [
-      "main.js",
-      "preload.js",
-      "index.html",
-      "renderer.js",
-      "styles.css",
-      "icon.ico",
-      "node_modules/**/*"
+      "**/*",
+      "!SiaeBridge/**"    // escludi cartella raw
     ],
+
     "extraResources": [
       {
-        "from": "SiaeBridge/bin/Release/net472",
-        "to": "SiaeBridge",
-        "filter": ["**/*"]
+        "from": "SiaeBridge/publish",
+        "to": "SiaeBridge"
       }
     ],
-    "asar": false
+
+    "win": {
+      "target": "nsis",
+      "requestedExecutionLevel": "asInvoker"
+    },
+
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
   }
 }
