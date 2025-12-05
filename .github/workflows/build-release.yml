@@ -36,12 +36,12 @@ jobs:
 
     - name: Copy libSIAE.dll into publish output
       run: |
-        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\Release\\net8.0\\win-x86\\publish\\
+        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\x86\\Release\\net8.0\\win-x86\\publish\\
 
     - name: Package Bridge ZIP
       run: |
         powershell Compress-Archive `
-          -Path desktop-app\\SiaeBridge\\bin\\Release\\net8.0\\win-x86\\publish\\* `
+          -Path desktop-app\\SiaeBridge\\bin\\x86\\Release\\net8.0\\win-x86\\publish\\* `
           -DestinationPath SIAE-Bridge.zip
 
     #
@@ -61,7 +61,7 @@ jobs:
     - name: Copy Bridge into Electron resources
       run: |
         mkdir desktop-app\\SiaeBridge\\publish
-        copy desktop-app\\SiaeBridge\\bin\\Release\\net8.0\\win-x86\\publish\\* desktop-app\\SiaeBridge\\publish\\
+        copy desktop-app\\SiaeBridge\\bin\\x86\\Release\\net8.0\\win-x86\\publish\\* desktop-app\\SiaeBridge\\publish\\
 
     - name: Build Electron app (EXE + ZIP)
       run: |
