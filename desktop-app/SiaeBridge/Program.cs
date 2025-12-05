@@ -1,125 +1,235 @@
 using System;
+using System.IO;
+using System.Runtime.InteropServices;
 using System.Text;
 using Newtonsoft.Json;
 
-class Program
+namespace SiaeBridge
 {
-    static void Main(string[] args)
+    class Program
     {
-        Console.OutputEncoding = Encoding.UTF8;
+        // ============================================================
+        // IMPORT libSIAE.dll
+        // ============================================================
+        private const string DLL = "libSIAE.dll";
 
-        var reader = new SIAEReader();
+        [DllImport(DLL)] static extern int isCardIn(int slot);
+        [DllImport(DLL)] static extern int Initialize(int slot);
+        [DllImport(DLL)] static extern int FinalizeML(int slot);
+        [DllImport(DLL)] static extern int BeginTransactionML(int slot);
+        [DllImport(DLL)] static extern int EndTransactionML(int slot);
+        [DllImport(DLL)] static extern int GetSNML(byte[] sn, int slot);
+        [DllImport(DLL)] static extern int ReadCounterML(ref uint val, int slot);
+        [DllImport(DLL)] static extern int ReadBalanceML(ref uint val, int slot);
+        [DllImport(DLL)] static extern byte GetKeyIDML(int slot);
+        [DllImport(DLL)] static extern int ComputeSigilloML(byte[] dt, uint price, byte[] sn, byte[] mac, ref uint cnt, int slot);
 
-        SendMessage(new {
-            command = "BRIDGE_READY",
-            success = true,
-            message = "Bridge avviato"
-        });
+        // ============================================================
+        // STATE
+        // ============================================================
+        static int _slot = -1;
+        static StreamWriter _log;
 
-        while (true)
+        // ============================================================
+        // MAIN
+        // ============================================================
+        static void Main()
+        {
+            try { _log = new StreamWriter(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bridge.log"), true) { AutoFlush = true }; } catch { }
+            
+            Log("=== SiaeBridge Started ===");
+            Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
+            Log($"DLL exists: {File.Exists(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "libSIAE.dll"))}");
+            
+            Console.WriteLine("READY");
+            
+            string line;
+            while ((line = Console.ReadLine()) != null)
+            {
+                line = line.Trim();
+                if (string.IsNullOrEmpty(line)) continue;
+                
+                Log($"CMD: {line}");
+                string response = Handle(line);
+                Console.WriteLine(response);
+                Log($"RSP: {response}");
+            }
+        }
+
+        static void Log(string msg)
+        {
+            try { _log?.WriteLine($"[{DateTime.Now:HH:mm:ss}] {msg}"); } catch { }
+        }
+
+        // ============================================================
+        // COMMAND HANDLER
+        // ============================================================
+        static string Handle(string cmd)
         {
             try
             {
-                string input = Console.ReadLine();
-                if (string.IsNullOrWhiteSpace(input))
-                    continue;
+                if (cmd == "PING") return OK("PONG");
+                if (cmd == "EXIT") { Environment.Exit(0); return OK("BYE"); }
+                if (cmd == "CHECK_READER") return CheckReader();
+                if (cmd == "READ_CARD") return ReadCard();
+                if (cmd.StartsWith("COMPUTE_SIGILLO:")) return ComputeSigillo(cmd.Substring(16));
+                return ERR($"Comando sconosciuto: {cmd}");
+            }
+            catch (DllNotFoundException) { return ERR("libSIAE.dll non trovata!"); }
+            catch (Exception ex) { return ERR(ex.Message); }
+        }
 
-                dynamic cmd = JsonConvert.DeserializeObject(input);
-                string command = cmd.command;
+        static string OK(object data) => JsonConvert.SerializeObject(new { success = true, data });
+        static string ERR(string msg) => JsonConvert.SerializeObject(new { success = false, error = msg });
 
-                switch (command)
+        // ============================================================
+        // CHECK READER
+        // ============================================================
+        static string CheckReader()
+        {
+            try
+            {
+                for (int s = 0; s < 16; s++)
                 {
-                    case "CHECK_READER":
-                        HandleCheckReader(reader);
-                        break;
-
-                    case "READ_ATR":
-                        HandleReadATR(reader);
-                        break;
-
-                    default:
-                        SendMessage(new {
-                            success = false,
-                            message = "Comando sconosciuto"
-                        });
-                        break;
+                    try
+                    {
+                        if (isCardIn(s) == 1)
+                        {
+                            _slot = s;
+                            int init = Initialize(s);
+                            Log($"Found card slot {s}, init={init}");
+                            return JsonConvert.SerializeObject(new
+                            {
+                                success = true,
+                                readerConnected = true,
+                                cardPresent = true,
+                                slot = s,
+                                message = "Carta SIAE rilevata"
+                            });
+                        }
+                    }
+                    catch { break; }
                 }
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    readerConnected = true,
+                    cardPresent = false,
+                    message = "Inserire carta SIAE"
+                });
+            }
+            catch (DllNotFoundException)
+            {
+                return JsonConvert.SerializeObject(new
+                {
+                    success = false,
+                    readerConnected = false,
+                    cardPresent = false,
+                    error = "libSIAE.dll non trovata"
+                });
             }
             catch (Exception ex)
             {
-                SendMessage(new {
+                return JsonConvert.SerializeObject(new
+                {
                     success = false,
-                    message = "Errore interno",
+                    readerConnected = false,
+                    cardPresent = false,
                     error = ex.Message
                 });
             }
         }
-    }
 
-    static void HandleCheckReader(SIAEReader reader)
-    {
-        bool connected = reader.IsReaderConnected();
-        bool cardPresent = reader.IsCardPresent();
-
-        SendMessage(new {
-            command = "CHECK_READER",
-            success = true,
-            readerConnected = connected,
-            cardPresent = cardPresent,
-            message = connected
-                ? (cardPresent ? "Carta presente" : "Lettore connesso - inserire la carta SIAE")
-                : "Lettore non rilevato"
-        });
-    }
-
-    static void HandleReadATR(SIAEReader reader)
-    {
-        if (!reader.IsReaderConnected())
+        // ============================================================
+        // READ CARD
+        // ============================================================
+        static string ReadCard()
         {
-            SendMessage(new {
-                command = "READ_ATR",
-                success = false,
-                message = "Lettore non rilevato"
-            });
-            return;
+            if (_slot < 0) return ERR("Nessuna carta rilevata");
+
+            bool tx = false;
+            try
+            {
+                if (isCardIn(_slot) != 1) { _slot = -1; return ERR("Carta rimossa"); }
+
+                Initialize(_slot);
+                BeginTransactionML(_slot);
+                tx = true;
+
+                byte[] sn = new byte[8];
+                int r = GetSNML(sn, _slot);
+                if (r != 0) return ERR($"Lettura SN fallita: {r}");
+
+                uint cnt = 0, bal = 0;
+                ReadCounterML(ref cnt, _slot);
+                ReadBalanceML(ref bal, _slot);
+                byte key = GetKeyIDML(_slot);
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    serialNumber = BitConverter.ToString(sn).Replace("-", ""),
+                    counter = cnt,
+                    balance = bal,
+                    keyId = (int)key,
+                    slot = _slot
+                });
+            }
+            catch (Exception ex) { return ERR(ex.Message); }
+            finally { if (tx) try { EndTransactionML(_slot); } catch { } }
         }
 
-        if (!reader.IsCardPresent())
+        // ============================================================
+        // COMPUTE SIGILLO
+        // ============================================================
+        static string ComputeSigillo(string json)
         {
-            SendMessage(new {
-                command = "READ_ATR",
-                success = false,
-                message = "Carta NON rilevata"
-            });
-            return;
-        }
+            if (_slot < 0) return ERR("Nessuna carta");
 
-        var atr = reader.GetATR();
-        if (atr == null || atr.Length == 0)
-        {
-            SendMessage(new {
-                command = "READ_ATR",
-                success = false,
-                message = "Impossibile leggere ATR"
-            });
-        }
-        else
-        {
-            string atrHex = BitConverter.ToString(atr).Replace("-", " ");
+            bool tx = false;
+            try
+            {
+                dynamic req = JsonConvert.DeserializeObject(json);
+                decimal price = req.price;
 
-            SendMessage(new {
-                command = "READ_ATR",
-                success = true,
-                atr = atrHex,
-                message = "ATR letto con successo"
-            });
-        }
-    }
+                if (isCardIn(_slot) != 1) { _slot = -1; return ERR("Carta rimossa"); }
 
-    static void SendMessage(object obj)
-    {
-        string json = Newtonsoft.Json.JsonConvert.SerializeObject(obj);
-        Console.WriteLine(json);
-        Console.Out.Flush();
+                Initialize(_slot);
+                BeginTransactionML(_slot);
+                tx = true;
+
+                DateTime dt = DateTime.Now;
+                byte[] bcd = new byte[5];
+                int y = dt.Year % 100;
+                bcd[0] = (byte)(((y / 10) << 4) | (y % 10));
+                bcd[1] = (byte)(((dt.Month / 10) << 4) | (dt.Month % 10));
+                bcd[2] = (byte)(((dt.Day / 10) << 4) | (dt.Day % 10));
+                bcd[3] = (byte)(((dt.Hour / 10) << 4) | (dt.Hour % 10));
+                bcd[4] = (byte)(((dt.Minute / 10) << 4) | (dt.Minute % 10));
+
+                uint cents = (uint)(price * 100);
+                byte[] sn = new byte[8], mac = new byte[8];
+                uint cnt = 0;
+
+                int r = ComputeSigilloML(bcd, cents, sn, mac, ref cnt, _slot);
+                if (r != 0) return ERR($"Sigillo fallito: {r}");
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    sigillo = new
+                    {
+                        serialNumber = BitConverter.ToString(sn).Replace("-", ""),
+                        mac = BitConverter.ToString(mac).Replace("-", ""),
+                        counter = cnt,
+                        dateTime = dt.ToString("yyyy-MM-dd HH:mm"),
+                        price = price
+                    }
+                });
+            }
+            catch (Exception ex) { return ERR(ex.Message); }
+            finally { if (tx) try { EndTransactionML(_slot); } catch { } }
+        }
     }
 }
