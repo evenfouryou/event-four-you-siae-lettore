@@ -1,0 +1,79 @@
+name: Build SIAE Lettore
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build SiaeBridge (32-bit)
+        working-directory: desktop-app/SiaeBridge
+        run: |
+          dotnet restore
+          dotnet build -c Release
+          dir bin\Release\net472\
+
+      - name: Copy libSIAE.dll
+        shell: pwsh
+        run: |
+          $src = "attached_assets/libSIAE.dll"
+          $dst = "desktop-app/SiaeBridge/bin/Release/net472/libSIAE.dll"
+          if (Test-Path $src) {
+            Copy-Item $src $dst -Force
+            Write-Host "✓ libSIAE.dll copiata"
+          } else {
+            Write-Host "✗ libSIAE.dll non trovata in attached_assets!"
+            exit 1
+          }
+
+      - name: Verify bridge files
+        shell: pwsh
+        run: |
+          $dir = "desktop-app/SiaeBridge/bin/Release/net472"
+          $files = @("SiaeBridge.exe", "libSIAE.dll")
+          foreach ($f in $files) {
+            $path = Join-Path $dir $f
+            if (Test-Path $path) {
+              Write-Host "✓ $f"
+            } else {
+              Write-Host "✗ MANCA: $f"
+              exit 1
+            }
+          }
+
+      - name: Install Node dependencies
+        working-directory: desktop-app
+        run: npm install
+
+      - name: Build Electron app
+        working-directory: desktop-app
+        run: npm run build
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAE-Lettore-Installer
+          path: desktop-app/dist/*.exe
+
+      - name: Upload portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAE-Lettore-Portable
+          path: desktop-app/dist/win-unpacked/
