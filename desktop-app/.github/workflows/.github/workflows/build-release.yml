@@ -1,0 +1,63 @@
+name: Build & Release SIAE Bridge
+
+on:
+  push:
+    branches: ["main"]
+  workflow_dispatch:
+
+jobs:
+  build-release:
+    runs-on: windows-latest
+    
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Setup .NET 6 SDK
+      uses: actions/setup-dotnet@v3
+      with:
+        dotnet-version: '6.0.x'
+
+    - name: Restore dependencies
+      run: |
+        cd desktop-app/SiaeBridge
+        dotnet restore
+
+    - name: Build Bridge (Release x86)
+      run: |
+        cd desktop-app/SiaeBridge
+        dotnet publish -c Release -r win-x86 --self-contained false /p:Platform=x86
+
+    - name: Copy libSIAE.dll into output
+      run: |
+        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\
+
+    - name: Create ZIP package
+      run: |
+        powershell Compress-Archive `
+          -Path desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\* `
+          -DestinationPath SIAE-Bridge.zip
+
+    - name: Generate version tag
+      id: version
+      run: |
+        $date = Get-Date -Format "yyyyMMdd-HHmm"
+        echo "tag=v$date" >> $env:GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.tag }}
+        name: "SIAE Bridge Build ${{ steps.version.outputs.tag }}"
+        body: |
+          🚀 Build automatico del SIAE Bridge
+          
+          Contiene:
+          - SiaeBridge.exe
+          - libSIAE.dll
+          - Tutte le dipendenze
+          
+          Questo file è pronto all'uso.
+        files: SIAE-Bridge.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
