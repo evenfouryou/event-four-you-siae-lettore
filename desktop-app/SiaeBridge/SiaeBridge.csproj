@@ -2,7 +2,7 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-<TargetFramework>net8.0</TargetFramework>
+    <TargetFramework>net8.0</TargetFramework>
     <RuntimeIdentifier>win-x86</RuntimeIdentifier>
     <SelfContained>false</SelfContained>
     <PlatformTarget>x86</PlatformTarget>
@@ -10,6 +10,11 @@
     <AssemblyName>SiaeBridge</AssemblyName>
     <RootNamespace>SiaeBridge</RootNamespace>
     <GenerateAssemblyInfo>false</GenerateAssemblyInfo>
+
+    <!-- FIX CRITICO -->
+    <PublishSingleFile>false</PublishSingleFile>
+    <PublishTrimmed>false</PublishTrimmed>
+    <DebugType>portable</DebugType>
   </PropertyGroup>
 
   <ItemGroup>
