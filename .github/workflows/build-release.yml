@@ -16,9 +16,9 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v3
 
-    # ----------------------------------------
-    # .NET 8 BRIDGE BUILD
-    # ----------------------------------------
+    #
+    # ---- .NET 8 BRIDGE ----
+    #
     - name: Setup .NET 8 SDK
       uses: actions/setup-dotnet@v3
       with:
@@ -32,3 +32,65 @@ jobs:
     - name: Build Bridge (.NET 8 x86)
       run: |
         cd desktop-app/SiaeBridge
+        dotnet publish -c Release -r win-x86 --self-contained false
+
+    - name: Copy libSIAE.dll into publish output
+      run: |
+        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\Release\\net8.0\\win-x86\\publish\\
+
+    - name: Package Bridge ZIP
+      run: |
+        powershell Compress-Archive `
+          -Path desktop-app\\SiaeBridge\\bin\\Release\\net8.0\\win-x86\\publish\\* `
+          -DestinationPath SIAE-Bridge.zip
+
+    #
+    # ---- ELECTRON ----
+    #
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: "18"
+
+    - name: Install Electron dependencies
+      run: |
+        cd desktop-app
+        npm install
+        npm install --save-dev electron-builder
+
+    - name: Copy Bridge into Electron resources
+      run: |
+        mkdir desktop-app\\SiaeBridge\\publish
+        copy desktop-app\\SiaeBridge\\bin\\Release\\net8.0\\win-x86\\publish\\* desktop-app\\SiaeBridge\\publish\\
+
+    - name: Build Electron app (EXE + ZIP)
+      run: |
+        cd desktop-app
+        npx electron-builder --win --x64
+
+    #
+    # ---- RELEASE ----
+    #
+    - name: Generate version tag
+      id: version
+      run: |
+        $date = Get-Date -Format "yyyyMMdd-HHmm"
+        echo "tag=v$date" >> $env:GITHUB_OUTPUT
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v1
+      with:
+        tag_name: ${{ steps.version.outputs.tag }}
+        name: "EFY SIAE Reader Build ${{ steps.version.outputs.tag }}"
+        body: |
+          🚀 EFY SIAE Reader Release
+          Contiene:
+          - SIAE-Bridge.zip (solo bridge)
+          - Installer Windows (.exe)
+          - Versione portable (.zip)
+        files: |
+          desktop-app/dist/*.exe
+          desktop-app/dist/*.zip
+          SIAE-Bridge.zip
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
