@@ -2,7 +2,7 @@
   "name": "efy-siae-reader",
   "version": "1.0.0",
   "description": "Event Four You SIAE Card Reader",
-  "main": "index.js",
+  "main": "main.js",
   "author": "Hureax Srl",
   "license": "ISC",
 
@@ -31,7 +31,7 @@
 
     "files": [
       "**/*",
-      "!SiaeBridge/**"    // escludi cartella raw
+      "!SiaeBridge/**"
     ],
 
     "extraResources": [
@@ -41,15 +41,4 @@
       }
     ],
 
-    "win": {
-      "target": "nsis",
-      "requestedExecutionLevel": "asInvoker"
-    },
-
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true
-    }
-  }
-}
+    "win":
