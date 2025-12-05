@@ -30,12 +30,12 @@ jobs:
 
     - name: Copy libSIAE.dll into publish output
       run: |
-        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\publish\\
+        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\x86\\Release\\net6.0\\win-x86\\publish\\
 
     - name: Create ZIP package
       run: |
         powershell Compress-Archive `
-          -Path desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\publish\\* `
+          -Path desktop-app\\SiaeBridge\\bin\\x86\\Release\\net6.0\\win-x86\\publish\\* `
           -DestinationPath SIAE-Bridge.zip
 
     - name: Generate version tag
