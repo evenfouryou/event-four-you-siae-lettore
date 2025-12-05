@@ -28,14 +28,14 @@ jobs:
         cd desktop-app/SiaeBridge
         dotnet publish -c Release -r win-x86 --self-contained false /p:Platform=x86
 
-    - name: Copy libSIAE.dll into output
+    - name: Copy libSIAE.dll into publish output
       run: |
-        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\
+        copy attached_assets\\libSIAE.dll desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\publish\\
 
     - name: Create ZIP package
       run: |
         powershell Compress-Archive `
-          -Path desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\* `
+          -Path desktop-app\\SiaeBridge\\bin\\Release\\net6.0\\win-x86\\publish\\* `
           -DestinationPath SIAE-Bridge.zip
 
     - name: Generate version tag
@@ -50,14 +50,14 @@ jobs:
         tag_name: ${{ steps.version.outputs.tag }}
         name: "SIAE Bridge Build ${{ steps.version.outputs.tag }}"
         body: |
-          🚀 Build automatico del SIAE Bridge
-          
-          Contiene:
+          🚀 Build automatico del SIAE Bridge (.NET 6 - win-x86)
+
+          Questo pacchetto contiene:
           - SiaeBridge.exe
           - libSIAE.dll
           - Tutte le dipendenze
           
-          Questo file è pronto all'uso.
+          Pronto all'uso.
         files: SIAE-Bridge.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
