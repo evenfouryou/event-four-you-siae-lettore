@@ -29,10 +29,10 @@ jobs:
         cd desktop-app/SiaeBridge
         dotnet restore
 
-    - name: Build Bridge (.NET 8 x86)
+    - name: Build Bridge (.NET 8 x86 self-contained)
       run: |
         cd desktop-app/SiaeBridge
-        dotnet publish -c Release -r win-x86 --self-contained false
+        dotnet publish -c Release -r win-x86 --self-contained true /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true
 
     - name: Copy libSIAE.dll into publish output
       run: |
@@ -50,7 +50,7 @@ jobs:
     - name: Setup Node.js
       uses: actions/setup-node@v3
       with:
-        node-version: "18"
+        node-version: 18
 
     - name: Install Electron dependencies
       run: |
@@ -85,7 +85,7 @@ jobs:
         body: |
           🚀 EFY SIAE Reader Release
           Contiene:
-          - SIAE-Bridge.zip (solo bridge)
+          - SIAE-Bridge.zip (bridge self-contained)
           - Installer Windows (.exe)
           - Versione portable (.zip)
         files: |
