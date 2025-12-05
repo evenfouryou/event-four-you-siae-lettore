@@ -28,15 +28,28 @@ jobs:
         run: |
           dotnet restore
           dotnet build -c Release
+          dir bin\Release\net472\
 
       - name: Copy libSIAE.dll
         shell: pwsh
         run: |
           $out = "desktop-app/SiaeBridge/bin/Release/net472"
+          
+          if (-not (Test-Path $out)) {
+            New-Item -ItemType Directory -Path $out -Force
+          }
+          
           $dll = "desktop-app/SiaeBridge/prebuilt/libSIAE.dll"
-          Copy-Item $dll "$out/libSIAE.dll" -Force
-          Write-Host "Files in output:"
-          Get-ChildItem $out | Format-Table Name, Length
+          if (Test-Path $dll) {
+            Copy-Item $dll "$out/libSIAE.dll" -Force
+            Write-Host "✓ Copied libSIAE.dll"
+          } else {
+            Write-Host "ERROR: libSIAE.dll not found at $dll"
+            Get-ChildItem "desktop-app/SiaeBridge" -Recurse
+            exit 1
+          }
+          
+          Get-ChildItem $out
 
       - name: Install Node
         working-directory: desktop-app
