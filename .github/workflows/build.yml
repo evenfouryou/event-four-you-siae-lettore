@@ -1,0 +1,59 @@
+name: Build SIAE Lettore
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build SiaeBridge
+        working-directory: desktop-app/SiaeBridge
+        run: |
+          dotnet restore
+          dotnet build -c Release
+
+      - name: Copy libSIAE.dll
+        shell: pwsh
+        run: |
+          $out = "desktop-app/SiaeBridge/bin/Release/net472"
+          $dll = "desktop-app/SiaeBridge/prebuilt/libSIAE.dll"
+          Copy-Item $dll "$out/libSIAE.dll" -Force
+          Write-Host "Files in output:"
+          Get-ChildItem $out | Format-Table Name, Length
+
+      - name: Install Node
+        working-directory: desktop-app
+        run: npm install
+
+      - name: Build Electron
+        working-directory: desktop-app
+        run: npm run build
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAE-Lettore-Installer
+          path: desktop-app/dist/*.exe
+
+      - name: Upload portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAE-Lettore-Portable
+          path: desktop-app/dist/win-unpacked/
