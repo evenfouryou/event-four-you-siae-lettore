@@ -27,7 +27,7 @@ jobs:
     - name: Build SiaeBridge
       run: |
         cd SiaeBridge
-        dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ../resources
+        dotnet publish -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -o ../resources
 
     - name: Install dependencies
       run: npm install
