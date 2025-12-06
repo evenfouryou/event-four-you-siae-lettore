@@ -1,4 +1,4 @@
-name: Build SIAE Lettore
+name: Build and Release
 
 on:
   push:
@@ -10,59 +10,35 @@ jobs:
     runs-on: windows-latest
     
     steps:
-      - name: Checkout
+      - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Setup .NET
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: '8.0.x'
-
+        
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-
-      - name: Build SiaeBridge (32-bit)
-        working-directory: desktop-app/SiaeBridge
-        run: |
-          dotnet restore
-          dotnet publish -c Release -r win-x86 --self-contained true -p:PublishSingleFile=false
-          echo "=== Output files ==="
-          dir bin\Release\net8.0-windows\win-x86\publish\
-
-      - name: Copy libSIAE.dll
-        shell: pwsh
-        run: |
-          $out = "desktop-app/SiaeBridge/bin/Release/net8.0-windows/win-x86/publish"
-          Copy-Item "desktop-app/SiaeBridge/prebuilt/libSIAE.dll" "$out/libSIAE.dll" -Force
           
-          echo "=== Final files ==="
-          Get-ChildItem $out | Where-Object { $_.Name -match '\.(exe|dll)$' -and $_.Name -notmatch '^api-|^clr' } | Format-Table Name, Length
-
-      - name: Fix package.json path
-        shell: pwsh
-        run: |
-          $pkg = Get-Content "desktop-app/package.json" -Raw
-          $pkg = $pkg -replace 'win-x86"', 'win-x86/publish"'
-          Set-Content "desktop-app/package.json" $pkg
-
-      - name: Install Node
-        working-directory: desktop-app
+      - name: Install dependencies
         run: npm install
-
-      - name: Build Electron
-        working-directory: desktop-app
+        
+      - name: Build Electron app
         run: npm run build
-
-      - name: Upload installer
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: SIAE-Lettore-Installer
-          path: desktop-app/dist/*.exe
-
-      - name: Upload portable
-        uses: actions/upload-artifact@v4
+          name: windows-installer
+          path: dist/*.exe
+          
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        if: github.ref == 'refs/heads/main'
         with:
-          name: SIAE-Lettore-Portable
-          path: desktop-app/dist/win-unpacked/
+          tag_name: v1.0.${{ github.run_number }}
+          name: Release v1.0.${{ github.run_number }}
+          files: dist/*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
