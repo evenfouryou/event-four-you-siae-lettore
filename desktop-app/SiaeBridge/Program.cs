@@ -8,18 +8,24 @@ namespace SiaeBridge
 {
     class Program
     {
+        // ============================================================
+        // SCARD_STATE flags from Windows Smart Card API
+        // ============================================================
         const int SCARD_STATE_UNAWARE = 0x0000;
         const int SCARD_STATE_IGNORE = 0x0001;
         const int SCARD_STATE_CHANGED = 0x0002;
         const int SCARD_STATE_UNKNOWN = 0x0004;
         const int SCARD_STATE_UNAVAILABLE = 0x0008;
-        const int SCARD_STATE_EMPTY = 0x0010;
-        const int SCARD_STATE_PRESENT = 0x0020;
+        const int SCARD_STATE_EMPTY = 0x0010;      // 16 - no card
+        const int SCARD_STATE_PRESENT = 0x0020;    // 32 - card present!
         const int SCARD_STATE_ATRMATCH = 0x0040;
         const int SCARD_STATE_EXCLUSIVE = 0x0080;
         const int SCARD_STATE_INUSE = 0x0100;
         const int SCARD_STATE_MUTE = 0x0200;
 
+        // ============================================================
+        // IMPORT libSIAE.dll - StdCall calling convention (confirmed)
+        // ============================================================
         private const string DLL = "libSIAE.dll";
 
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
@@ -52,6 +58,10 @@ namespace SiaeBridge
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int ComputeSigilloML(byte[] dt, uint price, byte[] sn, byte[] mac, ref uint cnt, int slot);
 
+        [DllImport(DLL, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi)]
+        static extern int VerifyPINML(int nPIN, string pin, int nSlot);
+
+        // Windows API
         [DllImport("winscard.dll", CharSet = CharSet.Unicode)]
         static extern int SCardListReadersW(IntPtr hContext, string mszGroups, byte[] mszReaders, ref int pcchReaders);
 
@@ -61,9 +71,15 @@ namespace SiaeBridge
         [DllImport("winscard.dll")]
         static extern int SCardReleaseContext(IntPtr hContext);
 
+        // ============================================================
+        // STATE
+        // ============================================================
         static int _slot = -1;
         static StreamWriter _log;
 
+        // ============================================================
+        // MAIN
+        // ============================================================
         static void Main()
         {
             string logPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "bridge.log");
@@ -77,9 +93,13 @@ namespace SiaeBridge
 
             string dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "libSIAE.dll");
             if (File.Exists(dllPath))
+            {
                 Log($"✓ libSIAE.dll: {new FileInfo(dllPath).Length} bytes");
+            }
             else
+            {
                 Log("✗ libSIAE.dll NOT FOUND!");
+            }
 
             Console.WriteLine("READY");
             Log("Bridge READY");
@@ -89,6 +109,7 @@ namespace SiaeBridge
             {
                 line = line.Trim();
                 if (string.IsNullOrEmpty(line)) continue;
+
                 Log($">> {line}");
                 string response = Handle(line);
                 Console.WriteLine(response);
@@ -101,8 +122,16 @@ namespace SiaeBridge
             try { _log?.WriteLine($"[{DateTime.Now:HH:mm:ss.fff}] {msg}"); } catch { }
         }
 
+        // ============================================================
+        // Check if card is present using SCARD_STATE bitmask
+        // ============================================================
         static bool IsCardPresent(int state)
         {
+            // isCardIn returns SCARD_STATE bitmask:
+            // - 0 means no readers or error
+            // - 16 (0x10) = SCARD_STATE_EMPTY = no card
+            // - 32 (0x20) = SCARD_STATE_PRESENT = card present!
+            // - Can be combined: 34 = PRESENT | CHANGED
             return (state & SCARD_STATE_PRESENT) != 0;
         }
 
@@ -122,6 +151,9 @@ namespace SiaeBridge
             return flags.Count > 0 ? string.Join("|", flags) : $"0x{state:X2}";
         }
 
+        // ============================================================
+        // COMMAND HANDLER
+        // ============================================================
         static string Handle(string cmd)
         {
             try
@@ -130,6 +162,7 @@ namespace SiaeBridge
                 if (cmd == "EXIT") { Environment.Exit(0); return OK("BYE"); }
                 if (cmd == "CHECK_READER") return CheckReader();
                 if (cmd == "READ_CARD") return ReadCard();
+                if (cmd.StartsWith("VERIFY_PIN:")) return VerifyPin(cmd.Substring(11));
                 if (cmd.StartsWith("COMPUTE_SIGILLO:")) return ComputeSigillo(cmd.Substring(16));
                 return ERR($"Comando sconosciuto: {cmd}");
             }
@@ -148,6 +181,9 @@ namespace SiaeBridge
         static string OK(object data) => JsonConvert.SerializeObject(new { success = true, data });
         static string ERR(string msg) => JsonConvert.SerializeObject(new { success = false, error = msg });
 
+        // ============================================================
+        // CHECK READER
+        // ============================================================
         static string CheckReader()
         {
             bool hasReaders = CheckWindowsSmartCardReaders();
@@ -174,18 +210,24 @@ namespace SiaeBridge
                         string decoded = DecodeCardState(state);
                         Log($"  isCardIn({s}) = {state} (0x{state:X2}) = {decoded}");
 
-                        if (state == 0) break;
+                        if (state == 0)
+                        {
+                            // No more readers
+                            break;
+                        }
 
                         if (IsCardPresent(state))
                         {
                             Log($"  ✓ CARTA PRESENTE in slot {s}!");
+
+                            // Try to initialize
                             Log($"  Trying Initialize({s})...");
                             int init = Initialize(s);
                             Log($"  Initialize({s}) = {init} (0x{init:X4})");
 
                             _slot = s;
 
-                            if (init == 0 || init == 3)
+                            if (init == 0 || init == 3) // 0=OK, 3=already initialized
                             {
                                 return JsonConvert.SerializeObject(new
                                 {
@@ -268,6 +310,9 @@ namespace SiaeBridge
             catch { return false; }
         }
 
+        // ============================================================
+        // READ CARD
+        // ============================================================
         static string ReadCard()
         {
             if (_slot < 0) return ERR("Nessuna carta rilevata - prima fai CHECK_READER");
@@ -297,7 +342,9 @@ namespace SiaeBridge
                 Log($"  GetSNML = {snResult}, SN = {BitConverter.ToString(sn)}");
 
                 if (snResult != 0)
+                {
                     return ERR($"Lettura SN fallita: errore 0x{snResult:X4}");
+                }
 
                 uint cnt = 0, bal = 0;
                 int cntResult = ReadCounterML(ref cnt, _slot);
@@ -325,11 +372,111 @@ namespace SiaeBridge
             {
                 if (tx)
                 {
-                    try { EndTransactionML(_slot); Log("  EndTransactionML done"); } catch { }
+                    try
+                    {
+                        EndTransactionML(_slot);
+                        Log("  EndTransactionML done");
+                    }
+                    catch { }
                 }
             }
         }
 
+        // ============================================================
+        // VERIFY PIN - Verifica PIN sulla carta SIAE
+        // ============================================================
+        static string VerifyPin(string pin)
+        {
+            if (_slot < 0) return ERR("Nessuna carta rilevata - prima fai CHECK_READER");
+
+            bool tx = false;
+            try
+            {
+                Log($"VerifyPin: slot={_slot}, pin={new string('*', pin.Length)} (length={pin.Length})");
+
+                int state = isCardIn(_slot);
+                Log($"  isCardIn({_slot}) = {state} ({DecodeCardState(state)})");
+                if (!IsCardPresent(state))
+                {
+                    _slot = -1;
+                    return ERR("Carta rimossa");
+                }
+
+                int init = Initialize(_slot);
+                Log($"  Initialize = {init}");
+
+                int txResult = BeginTransactionML(_slot);
+                Log($"  BeginTransactionML = {txResult}");
+                tx = (txResult == 0);
+
+                // nPIN = 1 (identificatore PIN utente, NON la lunghezza!)
+                // Dalla documentazione SIAE test.c: pVerifyPINML(1, pin, slot)
+                const int USER_PIN_REFERENCE = 1;
+                int pinResult = VerifyPINML(USER_PIN_REFERENCE, pin, _slot);
+                Log($"  VerifyPINML(nPIN={USER_PIN_REFERENCE}, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+
+                if (pinResult == 0)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        verified = true,
+                        message = "PIN verificato correttamente"
+                    });
+                }
+                else if (pinResult == 0x6982)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        verified = false,
+                        error = "PIN errato",
+                        errorCode = pinResult
+                    });
+                }
+                else if (pinResult == 0x6983)
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        verified = false,
+                        error = "PIN bloccato - troppi tentativi errati",
+                        errorCode = pinResult
+                    });
+                }
+                else
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        verified = false,
+                        error = $"Errore verifica PIN: 0x{pinResult:X4}",
+                        errorCode = pinResult
+                    });
+                }
+            }
+            catch (Exception ex)
+            {
+                Log($"VerifyPin error: {ex.Message}");
+                return ERR(ex.Message);
+            }
+            finally
+            {
+                if (tx)
+                {
+                    try
+                    {
+                        EndTransactionML(_slot);
+                        Log("  EndTransactionML done");
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        // ============================================================
+        // COMPUTE SIGILLO
+        // ============================================================
         static string ComputeSigillo(string json)
         {
             if (_slot < 0) return ERR("Nessuna carta");
