@@ -694,7 +694,7 @@ function startStatusPolling() {
         pinLocked = true;
         pinVerified = false;
         
-        // Notify renderer to show PIN dialog
+        // Notify renderer to show PIN dialog (only once)
         if (mainWindow && mainWindow.webContents) {
           mainWindow.webContents.send('pin:required', {
             reason: 'Carta SIAE rimossa - inserire PIN per continuare'
@@ -705,9 +705,11 @@ function startStatusPolling() {
       // Update card state tracking
       cardWasInserted = cardCurrentlyInserted;
       
-      // When card is inserted and PIN was locked, require PIN to unlock
-      if (cardCurrentlyInserted && pinLocked) {
-        log.info('SIAE: Carta reinserita - PIN ancora richiesto');
+      // When card is inserted and PIN was locked, show PIN dialog if not already showing
+      // Only notify once, not on every poll cycle
+      if (cardCurrentlyInserted && pinLocked && !pinVerified) {
+        // Don't spam the renderer - it will handle showing the dialog once
+        log.debug('SIAE: PIN ancora richiesto (waiting for verification)');
       }
       
       // Auto-read card data when card is inserted
