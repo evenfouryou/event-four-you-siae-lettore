@@ -419,11 +419,30 @@ namespace SiaeBridge
                 Log($"  BeginTransactionML = {txResult}");
                 tx = (txResult == 0);
 
-                // nPIN = 1 (identificatore PIN utente, NON la lunghezza!)
-                // Dalla documentazione SIAE test.c: pVerifyPINML(1, pin, slot)
-                const int USER_PIN_REFERENCE = 1;
-                int pinResult = VerifyPINML(USER_PIN_REFERENCE, pin, _slot);
-                Log($"  VerifyPINML(nPIN={USER_PIN_REFERENCE}, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                // Prova con diversi valori per nPIN:
+                // - Alcune carte usano 0 come riferimento PIN utente
+                // - Altre usano 1 
+                // - Altre ancora usano la lunghezza del PIN
+                
+                // Prima prova con 0 (PIN reference standard ISO)
+                int pinResult = VerifyPINML(0, pin, _slot);
+                Log($"  VerifyPINML(nPIN=0, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                
+                // Se fallisce con 0x6A88, prova con 1
+                if (pinResult == 0x6A88)
+                {
+                    Log("  Provo con nPIN=1...");
+                    pinResult = VerifyPINML(1, pin, _slot);
+                    Log($"  VerifyPINML(nPIN=1, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                }
+                
+                // Se ancora fallisce, prova con la lunghezza del PIN
+                if (pinResult == 0x6A88)
+                {
+                    Log($"  Provo con nPIN={pin.Length} (lunghezza PIN)...");
+                    pinResult = VerifyPINML(pin.Length, pin, _slot);
+                    Log($"  VerifyPINML(nPIN={pin.Length}, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                }
 
                 if (pinResult == 0)
                 {
