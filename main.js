@@ -688,23 +688,40 @@ function startStatusPolling() {
       const result = await sendBridgeCommand('CHECK_READER');
       const cardCurrentlyInserted = result.cardPresent || false;
       
-      // Update card state tracking
+      // Track card state changes
       const cardJustInserted = !cardWasInserted && cardCurrentlyInserted;
       const cardJustRemoved = cardWasInserted && !cardCurrentlyInserted;
-      cardWasInserted = cardCurrentlyInserted;
       
-      // SIAE PIN verification is DISABLED for now
-      // The PIN should only be required for specific operations like computing sigillo
-      // Not for general card presence detection
+      // SIAE PIN verification logic:
+      // 1. First time card is inserted -> require PIN
+      // 2. Card removed and reinserted -> require PIN
       
-      // Reset pinLocked when card is present - we don't need PIN just for card detection
-      if (cardCurrentlyInserted) {
-        if (pinLocked) {
-          log.info('SIAE: Carta inserita - PIN lock rimosso (non richiesto per rilevamento carta)');
-          pinLocked = false;
-          pinVerified = true; // Consider verified for basic operations
+      // Card just removed -> lock PIN for next insertion
+      if (cardJustRemoved) {
+        log.info('SIAE: Carta rimossa - PIN sarà richiesto al prossimo inserimento');
+        pinLocked = true;
+        pinVerified = false;
+      }
+      
+      // Card just inserted (first time or after removal) -> show PIN dialog
+      if (cardJustInserted) {
+        if (!pinVerified) {
+          log.info('SIAE: Carta inserita - richiesta verifica PIN');
+          pinLocked = true;
+          
+          // Notify renderer to show PIN dialog
+          if (mainWindow && mainWindow.webContents) {
+            mainWindow.webContents.send('pin:required', {
+              reason: 'Inserire il PIN della carta SIAE per continuare'
+            });
+          }
+        } else {
+          log.info('SIAE: Carta inserita - PIN già verificato in questa sessione');
         }
       }
+      
+      // Update card state tracking AFTER checking changes
+      cardWasInserted = cardCurrentlyInserted;
       
       // Auto-read card data when card is inserted
       let cardData = {};
