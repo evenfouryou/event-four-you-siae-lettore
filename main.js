@@ -688,28 +688,22 @@ function startStatusPolling() {
       const result = await sendBridgeCommand('CHECK_READER');
       const cardCurrentlyInserted = result.cardPresent || false;
       
-      // SIAE PIN verification: detect card removal
-      if (cardWasInserted && !cardCurrentlyInserted && !pinLocked) {
-        log.info('SIAE: Carta rimossa - richiesta verifica PIN');
-        pinLocked = true;
-        pinVerified = false;
-        
-        // Notify renderer to show PIN dialog (only once)
-        if (mainWindow && mainWindow.webContents) {
-          mainWindow.webContents.send('pin:required', {
-            reason: 'Carta SIAE rimossa - inserire PIN per continuare'
-          });
-        }
-      }
-      
       // Update card state tracking
+      const cardJustInserted = !cardWasInserted && cardCurrentlyInserted;
+      const cardJustRemoved = cardWasInserted && !cardCurrentlyInserted;
       cardWasInserted = cardCurrentlyInserted;
       
-      // When card is inserted and PIN was locked, show PIN dialog if not already showing
-      // Only notify once, not on every poll cycle
-      if (cardCurrentlyInserted && pinLocked && !pinVerified) {
-        // Don't spam the renderer - it will handle showing the dialog once
-        log.debug('SIAE: PIN ancora richiesto (waiting for verification)');
+      // SIAE PIN verification is DISABLED for now
+      // The PIN should only be required for specific operations like computing sigillo
+      // Not for general card presence detection
+      
+      // Reset pinLocked when card is present - we don't need PIN just for card detection
+      if (cardCurrentlyInserted) {
+        if (pinLocked) {
+          log.info('SIAE: Carta inserita - PIN lock rimosso (non richiesto per rilevamento carta)');
+          pinLocked = false;
+          pinVerified = true; // Consider verified for basic operations
+        }
       }
       
       // Auto-read card data when card is inserted
