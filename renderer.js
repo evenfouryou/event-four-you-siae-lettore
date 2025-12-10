@@ -451,16 +451,49 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       
-      const result = await window.siaeAPI.verifyPin(pin);
+      // Disable button during verification
+      pinSubmit.disabled = true;
+      pinSubmit.textContent = 'Verifica...';
+      pinError.style.display = 'none';
       
-      if (result.success) {
-        addLog('info', '✓ PIN verificato correttamente');
-        closePinDialog();
-      } else {
+      try {
+        addLog('info', 'Verifica PIN in corso...');
+        const result = await window.siaeAPI.verifyPin(pin);
+        addLog('info', `Risultato verifica PIN: ${JSON.stringify(result)}`);
+        
+        if (result.success) {
+          // Show success message briefly before closing
+          pinError.textContent = '✓ PIN verificato correttamente!';
+          pinError.style.color = '#4caf50';
+          pinError.style.display = 'block';
+          addLog('info', '✓ PIN verificato correttamente');
+          
+          setTimeout(() => {
+            closePinDialog();
+          }, 1000);
+        } else {
+          // Show specific error message
+          const errorMsg = result.error || 'PIN errato';
+          pinError.textContent = errorMsg;
+          pinError.style.color = '#f44336';
+          pinError.style.display = 'block';
+          pinInput.value = '';
+          pinInput.focus();
+          addLog('error', `PIN errato: ${errorMsg}`);
+          
+          // Re-enable button
+          pinSubmit.disabled = false;
+          pinSubmit.textContent = 'Conferma';
+        }
+      } catch (err) {
+        pinError.textContent = `Errore: ${err.message}`;
+        pinError.style.color = '#f44336';
         pinError.style.display = 'block';
-        pinInput.value = '';
-        pinInput.focus();
-        addLog('error', 'PIN errato');
+        addLog('error', `Errore verifica PIN: ${err.message}`);
+        
+        // Re-enable button
+        pinSubmit.disabled = false;
+        pinSubmit.textContent = 'Conferma';
       }
     }
     
