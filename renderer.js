@@ -451,55 +451,45 @@ document.addEventListener('DOMContentLoaded', () => {
         return;
       }
       
-      // Disable button during verification
       pinSubmit.disabled = true;
       pinSubmit.textContent = 'Verifica...';
-      pinError.style.display = 'none';
       
       try {
-        addLog('info', 'Verifica PIN in corso...');
         const result = await window.siaeAPI.verifyPin(pin);
-        addLog('info', `Risultato verifica PIN: ${JSON.stringify(result)}`);
+        console.log('PIN verification result:', result);
         
-        if (result.success) {
-          // Show success message briefly before closing
-          pinError.textContent = '✓ PIN verificato correttamente!';
-          pinError.style.color = '#4caf50';
-          pinError.style.display = 'block';
+        if (result && result.success) {
           addLog('info', '✓ PIN verificato correttamente');
-          
-          setTimeout(() => {
-            closePinDialog();
-          }, 1000);
+          closePinDialog();
         } else {
-          // Show specific error message
-          const errorMsg = result.error || 'PIN errato';
-          pinError.textContent = errorMsg;
-          pinError.style.color = '#f44336';
+          pinError.textContent = result?.error || 'PIN errato';
           pinError.style.display = 'block';
           pinInput.value = '';
           pinInput.focus();
-          addLog('error', `PIN errato: ${errorMsg}`);
-          
-          // Re-enable button
-          pinSubmit.disabled = false;
-          pinSubmit.textContent = 'Conferma';
+          addLog('error', result?.error || 'PIN errato');
         }
       } catch (err) {
-        pinError.textContent = `Errore: ${err.message}`;
-        pinError.style.color = '#f44336';
+        console.error('PIN verification error:', err);
+        pinError.textContent = 'Errore verifica: ' + err.message;
         pinError.style.display = 'block';
-        addLog('error', `Errore verifica PIN: ${err.message}`);
-        
-        // Re-enable button
+        addLog('error', 'Errore verifica PIN: ' + err.message);
+      } finally {
         pinSubmit.disabled = false;
         pinSubmit.textContent = 'Conferma';
       }
     }
     
     function closePinDialog() {
-      overlay.remove();
+      console.log('Closing PIN dialog...');
+      try {
+        if (overlay && overlay.parentNode) {
+          overlay.parentNode.removeChild(overlay);
+        }
+      } catch (e) {
+        console.error('Error removing overlay:', e);
+      }
       pinDialogVisible = false;
+      console.log('PIN dialog closed, pinDialogVisible =', pinDialogVisible);
     }
     
     pinSubmit.addEventListener('click', verifyPin);
