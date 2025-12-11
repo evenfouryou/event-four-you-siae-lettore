@@ -38,6 +38,11 @@ namespace SiaeBridge
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int FinalizeML(int slot);
 
+        // SelectML - FONDAMENTALE: deve essere chiamata PRIMA di VerifyPINML
+        // fid = File ID: 0x0000 = MF, 0x1112 = DF Sigillo, 0x1111 = DF PKI
+        [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
+        static extern int SelectML(ushort fid, int slot);
+
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int BeginTransactionML(int slot);
 
@@ -92,7 +97,7 @@ namespace SiaeBridge
             try { _log = new StreamWriter(logPath, true) { AutoFlush = true }; } catch { }
 
             Log("═══════════════════════════════════════════════════════");
-            Log("SiaeBridge v3.3 - PIN marshalling fix + input sanitization");
+            Log("SiaeBridge v3.4 - SelectML before VerifyPINML (from SIAE test.c)");
             Log($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
             Log($"32-bit Process: {!Environment.Is64BitProcess}");
@@ -416,39 +421,31 @@ namespace SiaeBridge
                     return ERR("Carta rimossa");
                 }
 
-                // Finalize prima per resettare lo stato
-                try { FinalizeML(_slot); } catch { }
-                Log($"  FinalizeML done");
+                // Sequenza corretta da documentazione SIAE (test.c):
+                // 1. Initialize
+                // 2. SelectML(0x0000) - Master File
+                // 3. SelectML(0x1112) - DF Sigillo Fiscale
+                // 4. VerifyPINML(1, pin, slot)
                 
                 int init = Initialize(_slot);
                 Log($"  Initialize = {init}");
                 
-                // Ricontrolla presenza carta
-                int cardState2 = isCardIn(_slot);
-                Log($"  isCardIn after init = {cardState2}");
-
-                int txResult = BeginTransactionML(_slot);
-                Log($"  BeginTransactionML = {txResult}");
-                tx = (txResult == 0);
+                // Seleziona Master File (MF)
+                int sel1 = SelectML(0x0000, _slot);
+                Log($"  SelectML(0x0000) = {sel1} (0x{sel1:X4})");
                 
-                if (txResult != 0)
+                // Seleziona DF per Sigillo Fiscale (0x1112)
+                int sel2 = SelectML(0x1112, _slot);
+                Log($"  SelectML(0x1112) = {sel2} (0x{sel2:X4})");
+                
+                if (sel1 != 0 || sel2 != 0)
                 {
-                    Log($"  BeginTransactionML FALLITO! Provo senza transazione...");
+                    Log($"  ATTENZIONE: SelectML fallita, provo comunque VerifyPINML...");
                 }
 
-                // Il PIN per SIAE è tipicamente 8 cifre
-                // Prova con nPIN = 1 (come nel test.c SIAE)
+                // Verifica PIN con nPIN=1 (come da test.c SIAE)
                 int pinResult = VerifyPINML_Str(1, pin, _slot);
                 Log($"  VerifyPINML_Str(nPIN=1, pin, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
-                
-                // Se fallisce con 0x6A88, la carta potrebbe non avere PIN configurato
-                // o potrebbe usare un identificatore diverso
-                if (pinResult == 0x6A88)
-                {
-                    Log("  Errore 0x6A88 = PIN reference non trovato. La carta potrebbe non richiedere PIN.");
-                    // Consideriamo il PIN come verificato se la carta non lo richiede
-                    pinResult = 0;
-                }
 
                 if (pinResult == 0)
                 {
