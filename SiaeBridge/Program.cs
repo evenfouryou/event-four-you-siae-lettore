@@ -59,9 +59,13 @@ namespace SiaeBridge
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int ComputeSigilloML(byte[] dt, uint price, byte[] sn, byte[] mac, ref uint cnt, int slot);
 
-        // PIN deve essere passato come puntatore a stringa ANSI null-terminated
-        [DllImport(DLL, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi)]
-        static extern int VerifyPINML(int nPIN, [MarshalAs(UnmanagedType.LPStr)] string pin, int nSlot);
+        // PIN come byte array (char* in C)
+        [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
+        static extern int VerifyPINML(int nPIN, byte[] pin, int nSlot);
+        
+        // Alternativa: PIN come stringa ANSI
+        [DllImport(DLL, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi, EntryPoint = "VerifyPINML")]
+        static extern int VerifyPINML_Str(int nPIN, string pin, int nSlot);
 
         // Windows API
         [DllImport("winscard.dll", CharSet = CharSet.Unicode)]
@@ -419,29 +423,31 @@ namespace SiaeBridge
                 Log($"  BeginTransactionML = {txResult}");
                 tx = (txResult == 0);
 
+                // Converti PIN in byte array null-terminated (come char* in C)
+                byte[] pinBytes = System.Text.Encoding.ASCII.GetBytes(pin + "\0");
+                Log($"  PIN bytes: length={pinBytes.Length}");
+                
                 // Prova con diversi valori per nPIN:
-                // - Alcune carte usano 0 come riferimento PIN utente
-                // - Altre usano 1 
-                // - Altre ancora usano la lunghezza del PIN
+                // Secondo la documentazione SIAE test.c: pVerifyPINML(1, pin, slot)
                 
-                // Prima prova con 0 (PIN reference standard ISO)
-                int pinResult = VerifyPINML(0, pin, _slot);
-                Log($"  VerifyPINML(nPIN=0, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                // Prima prova con 1 (come da documentazione)
+                int pinResult = VerifyPINML(1, pinBytes, _slot);
+                Log($"  VerifyPINML(nPIN=1, pinBytes, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
                 
-                // Se fallisce con 0x6A88, prova con 1
-                if (pinResult == 0x6A88)
+                // Se fallisce, prova con 0
+                if (pinResult == 0x6A88 || pinResult == 0xFFFF || pinResult < 0)
                 {
-                    Log("  Provo con nPIN=1...");
-                    pinResult = VerifyPINML(1, pin, _slot);
-                    Log($"  VerifyPINML(nPIN=1, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                    Log("  Provo con nPIN=0...");
+                    pinResult = VerifyPINML(0, pinBytes, _slot);
+                    Log($"  VerifyPINML(nPIN=0, pinBytes, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
                 }
                 
                 // Se ancora fallisce, prova con la lunghezza del PIN
-                if (pinResult == 0x6A88)
+                if (pinResult == 0x6A88 || pinResult == 0xFFFF || pinResult < 0)
                 {
                     Log($"  Provo con nPIN={pin.Length} (lunghezza PIN)...");
-                    pinResult = VerifyPINML(pin.Length, pin, _slot);
-                    Log($"  VerifyPINML(nPIN={pin.Length}, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                    pinResult = VerifyPINML(pin.Length, pinBytes, _slot);
+                    Log($"  VerifyPINML(nPIN={pin.Length}, pinBytes, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
                 }
 
                 if (pinResult == 0)
