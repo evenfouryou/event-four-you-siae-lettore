@@ -38,11 +38,6 @@ namespace SiaeBridge
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int FinalizeML(int slot);
 
-        // SelectML - FONDAMENTALE: deve essere chiamata PRIMA di VerifyPINML
-        // fid = File ID: 0x0000 = MF, 0x1112 = DF Sigillo, 0x1111 = DF PKI
-        [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
-        static extern int SelectML(ushort fid, int slot);
-
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int BeginTransactionML(int slot);
 
@@ -64,13 +59,9 @@ namespace SiaeBridge
         [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
         static extern int ComputeSigilloML(byte[] dt, uint price, byte[] sn, byte[] mac, ref uint cnt, int slot);
 
-        // PIN come byte array (char* in C)
-        [DllImport(DLL, CallingConvention = CallingConvention.StdCall)]
-        static extern int VerifyPINML(int nPIN, byte[] pin, int nSlot);
-        
-        // Alternativa: PIN come stringa ANSI
-        [DllImport(DLL, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi, EntryPoint = "VerifyPINML")]
-        static extern int VerifyPINML_Str(int nPIN, string pin, int nSlot);
+        // PIN deve essere passato come puntatore a stringa ANSI null-terminated
+        [DllImport(DLL, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi)]
+        static extern int VerifyPINML(int nPIN, [MarshalAs(UnmanagedType.LPStr)] string pin, int nSlot);
 
         // Windows API
         [DllImport("winscard.dll", CharSet = CharSet.Unicode)]
@@ -97,7 +88,7 @@ namespace SiaeBridge
             try { _log = new StreamWriter(logPath, true) { AutoFlush = true }; } catch { }
 
             Log("═══════════════════════════════════════════════════════");
-            Log("SiaeBridge v3.4 - SelectML before VerifyPINML (from SIAE test.c)");
+            Log("SiaeBridge v3.3 - PIN marshalling fix + input sanitization");
             Log($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
             Log($"32-bit Process: {!Environment.Is64BitProcess}");
@@ -421,31 +412,18 @@ namespace SiaeBridge
                     return ERR("Carta rimossa");
                 }
 
-                // Sequenza corretta da documentazione SIAE (test.c):
-                // 1. Initialize
-                // 2. SelectML(0x0000) - Master File
-                // 3. SelectML(0x1112) - DF Sigillo Fiscale
-                // 4. VerifyPINML(1, pin, slot)
-                
                 int init = Initialize(_slot);
                 Log($"  Initialize = {init}");
-                
-                // Seleziona Master File (MF)
-                int sel1 = SelectML(0x0000, _slot);
-                Log($"  SelectML(0x0000) = {sel1} (0x{sel1:X4})");
-                
-                // Seleziona DF per Sigillo Fiscale (0x1112)
-                int sel2 = SelectML(0x1112, _slot);
-                Log($"  SelectML(0x1112) = {sel2} (0x{sel2:X4})");
-                
-                if (sel1 != 0 || sel2 != 0)
-                {
-                    Log($"  ATTENZIONE: SelectML fallita, provo comunque VerifyPINML...");
-                }
 
-                // Verifica PIN con nPIN=1 (come da test.c SIAE)
-                int pinResult = VerifyPINML_Str(1, pin, _slot);
-                Log($"  VerifyPINML_Str(nPIN=1, pin, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
+                int txResult = BeginTransactionML(_slot);
+                Log($"  BeginTransactionML = {txResult}");
+                tx = (txResult == 0);
+
+                // nPIN = 1 (identificatore PIN utente, NON la lunghezza!)
+                // Dalla documentazione SIAE test.c: pVerifyPINML(1, pin, slot)
+                const int USER_PIN_REFERENCE = 1;
+                int pinResult = VerifyPINML(USER_PIN_REFERENCE, pin, _slot);
+                Log($"  VerifyPINML(nPIN={USER_PIN_REFERENCE}, pin=***, slot={_slot}) = {pinResult} (0x{pinResult:X4})");
 
                 if (pinResult == 0)
                 {
