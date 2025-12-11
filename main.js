@@ -688,40 +688,27 @@ function startStatusPolling() {
       const result = await sendBridgeCommand('CHECK_READER');
       const cardCurrentlyInserted = result.cardPresent || false;
       
-      // Track card state changes
-      const cardJustInserted = !cardWasInserted && cardCurrentlyInserted;
-      const cardJustRemoved = cardWasInserted && !cardCurrentlyInserted;
-      
-      // SIAE PIN verification logic:
-      // 1. First time card is inserted -> require PIN
-      // 2. Card removed and reinserted -> require PIN
-      
-      // Card just removed -> lock PIN for next insertion
-      if (cardJustRemoved) {
-        log.info('SIAE: Carta rimossa - PIN sarà richiesto al prossimo inserimento');
+      // SIAE PIN verification: detect card removal
+      if (cardWasInserted && !cardCurrentlyInserted && !pinLocked) {
+        log.info('SIAE: Carta rimossa - richiesta verifica PIN');
         pinLocked = true;
         pinVerified = false;
-      }
-      
-      // Card just inserted (first time or after removal) -> show PIN dialog
-      if (cardJustInserted) {
-        if (!pinVerified) {
-          log.info('SIAE: Carta inserita - richiesta verifica PIN');
-          pinLocked = true;
-          
-          // Notify renderer to show PIN dialog
-          if (mainWindow && mainWindow.webContents) {
-            mainWindow.webContents.send('pin:required', {
-              reason: 'Inserire il PIN della carta SIAE per continuare'
-            });
-          }
-        } else {
-          log.info('SIAE: Carta inserita - PIN già verificato in questa sessione');
+        
+        // Notify renderer to show PIN dialog
+        if (mainWindow && mainWindow.webContents) {
+          mainWindow.webContents.send('pin:required', {
+            reason: 'Carta SIAE rimossa - inserire PIN per continuare'
+          });
         }
       }
       
-      // Update card state tracking AFTER checking changes
+      // Update card state tracking
       cardWasInserted = cardCurrentlyInserted;
+      
+      // When card is inserted and PIN was locked, require PIN to unlock
+      if (cardCurrentlyInserted && pinLocked) {
+        log.info('SIAE: Carta reinserita - PIN ancora richiesto');
+      }
       
       // Auto-read card data when card is inserted
       let cardData = {};
