@@ -758,7 +758,7 @@ function startStatusPolling() {
       // Update card state tracking
       cardWasInserted = cardCurrentlyInserted;
       
-      // Auto-read card data when card is inserted
+      // Auto-read card data when card is inserted AND PIN is verified
       let cardData = {};
       if (cardCurrentlyInserted && !pinLocked) {
         try {
