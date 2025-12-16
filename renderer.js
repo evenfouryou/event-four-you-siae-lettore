@@ -313,14 +313,20 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     sigilliList.innerHTML = sigilliHistory.map((s, index) => {
-      const timeStr = s.dateTime.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      let timeStr = '--:--';
+      try {
+        if (s.dateTime instanceof Date && !isNaN(s.dateTime)) {
+          timeStr = s.dateTime.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+        }
+      } catch (e) { /* fallback to --:-- */ }
+      
       return `
         <div class="sigillo-entry">
           <div class="sigillo-entry-info">
-            <span class="sigillo-entry-mac">${s.mac}</span>
-            <span class="sigillo-entry-details">#${s.counter} · ${timeStr}</span>
+            <span class="sigillo-entry-mac">${escapeHtml(s.mac || '-')}</span>
+            <span class="sigillo-entry-details">#${s.counter || 0} · ${timeStr}</span>
           </div>
-          <span class="sigillo-entry-price">€${s.price.toFixed(2)}</span>
+          <span class="sigillo-entry-price">€${(s.price || 0).toFixed(2)}</span>
         </div>
       `;
     }).join('');
