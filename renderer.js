@@ -22,10 +22,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const logContent = document.getElementById('log-content');
   
   const sigilloForm = document.getElementById('sigillo-form');
-  const sigilloResult = document.getElementById('sigillo-result');
+  const sigilliList = document.getElementById('sigilli-list');
 
   // State
   let bridgeConnected = false;
+  let sigilliHistory = []; // Store generated sigilli
   let readerConnected = false;
   let cardPresent = false;
   let relayConnected = false;
@@ -281,19 +282,48 @@ document.addEventListener('DOMContentLoaded', () => {
       });
       
       if (result.success) {
-        document.getElementById('sigillo-mac').textContent = result.sigillo.mac;
-        document.getElementById('sigillo-serial').textContent = result.sigillo.serialNumber;
-        document.getElementById('sigillo-counter').textContent = result.sigillo.counter;
-        sigilloResult.style.display = 'block';
+        // Add to history list
+        const sigillo = {
+          mac: result.sigillo.mac,
+          serial: result.sigillo.serialNumber,
+          counter: result.sigillo.counter,
+          price: price,
+          dateTime: dateTime
+        };
+        sigilliHistory.unshift(sigillo); // Add to top
+        renderSigilliList();
         
         addLog('info', `✓ Sigillo generato - MAC: ${result.sigillo.mac}`);
+        
+        // Clear price input for next
+        document.getElementById('input-price').value = '';
+        document.getElementById('input-price').focus();
       } else {
         addLog('error', `Errore sigillo: ${result.error}`);
-        sigilloResult.style.display = 'none';
       }
     } catch (err) {
       addLog('error', `Errore: ${err.message}`);
     }
+  }
+  
+  function renderSigilliList() {
+    if (sigilliHistory.length === 0) {
+      sigilliList.innerHTML = '<div class="sigilli-empty">Nessun sigillo generato</div>';
+      return;
+    }
+    
+    sigilliList.innerHTML = sigilliHistory.map((s, index) => {
+      const timeStr = s.dateTime.toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' });
+      return `
+        <div class="sigillo-entry">
+          <div class="sigillo-entry-info">
+            <span class="sigillo-entry-mac">${s.mac}</span>
+            <span class="sigillo-entry-details">#${s.counter} · ${timeStr}</span>
+          </div>
+          <span class="sigillo-entry-price">€${s.price.toFixed(2)}</span>
+        </div>
+      `;
+    }).join('');
   }
 
   function startPeriodicCheck() {
