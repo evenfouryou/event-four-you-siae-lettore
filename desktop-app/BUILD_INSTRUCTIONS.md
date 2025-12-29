@@ -1,18 +1,130 @@
 # 🔧 ISTRUZIONI DI BUILD - Event Four You SIAE Lettore
 
-## ✅ BUG FIX APPLICATO (Dicembre 2024)
+## ✅ NUOVA FUNZIONALITÀ v1.0.5 (Dicembre 2024)
 
-**Problema:** PIN mostrato come errato anche quando corretto
-**Causa:** Il parametro `nPIN` di `VerifyPINML` era sbagliato
-- Prima: `VerifyPINML(pin.Length, pin, slot)` - passava 4-8 (lunghezza)
-- Dopo: `VerifyPINML(1, pin, slot)` - passa 1 (identificatore PIN utente)
+**Funzionalità:** Estrazione email dal certificato X.509 della smart card
+
+### Cosa fa:
+- Legge il certificato PKI dalla smart card InfoCert
+- Estrae l'email dal campo Subject Alternative Name (SAN) o dal Subject
+- Invia `cardEmail`, `cardCertificateCN`, `cardCertificateExpiry` allo status
+- L'email è quella dove SIAE invia le risposte ai report C1
+
+### Modifiche:
+1. **SiaeBridge/Program.cs:** Aggiunto comando `GET_CERTIFICATE`
+2. **main.js:** Chiama GET_CERTIFICATE dopo READ_CARD quando il PIN è verificato
+
+### Per aggiornare:
+```powershell
+cd desktop-app
+git pull origin main
+cd SiaeBridge
+dotnet build -c Release
+cd ..
+npm start
+```
+
+---
+
+## ✅ BUG FIX v3.9 (Dicembre 2024)
+
+**Problema:** Initialize ritorna 3 ripetutamente durante CHECK_READER
+
+### Correzioni applicate v3.9:
+
+1. **FinalizeML in CHECK_READER:**
+   - Chiama `FinalizeML` prima di `Initialize` anche in CheckReader
+   - Ora Initialize ritorna 0 invece di 3 ad ogni controllo
+
+---
+
+## ✅ BUG FIX v3.8 (Dicembre 2024)
+
+**Problema:** Errore 0x6A88 "Referenced data not found" anche con Initialize = 0
+
+### Correzioni applicate v3.8:
+
+1. **SelectML prima del PIN:**
+   - Chiama `SelectML` con diversi file ID (0x3F00, 0x5000, 0x0000) per selezionare l'applicazione corretta
+   - L'errore 0x6A88 può significare che non è selezionato il file/DF corretto sulla carta
+
+2. **nPIN espanso:**
+   - Prova più valori nPIN: 1, 0, 2, 3, 0x11, 0x21, 0x81, 0x82
+
+---
+
+## ✅ BUG FIX v3.7 (Dicembre 2024)
+
+**Problema:** Initialize ritorna 3 invece di 0, causando errore 0x6A88 nella verifica PIN
+
+### Correzioni applicate v3.7:
+
+1. **Reset stato carta prima del PIN:**
+   - Chiama `FinalizeML` prima di `Initialize` per resettare lo stato della carta
+   - Se `Initialize` ritorna non-zero, riprova con `Finalize + pausa + Initialize`
+
+2. **Diagnosi migliorata:**
+   - Log del risultato di FinalizeML
+   - Log del secondo tentativo di Initialize se necessario
+
+---
+
+## ✅ BUG FIX v3.6 (Dicembre 2024)
+
+**Problema:** La v3.5 non provava tutti i valori nPIN perché controllava solo errore 0x6A88
+
+### Correzioni applicate v3.6:
+
+1. **Retry completo nPIN:**
+   - Prova TUTTI i valori nPIN = 1, 0, 2, 0x81, 0x82 in sequenza
+   - Si ferma solo su:
+     - Successo (0)
+     - PIN errato (0x63Cx) - il nPIN è corretto, il PIN no
+     - PIN bloccato (0x6983)
+   - Per qualsiasi altro errore (0x6A88, 0xFFFF, ecc.) continua a provare
+
+2. **Logging dettagliato:**
+   - Ogni tentativo mostra nPIN in decimale e esadecimale
+   - Indica chiaramente quando il PIN viene verificato con successo
+
+---
+
+## ✅ BUG FIX v3.4 (Dicembre 2024)
+
+**Problema:** I dati della carta SIAE (seriale, counter, balance, keyId) non venivano inviati al web
+
+### Correzioni applicate v3.4:
+
+1. **Logging completo lettura carta:**
+   - Aggiunto log per ogni operazione: GetSNML, ReadCounterML, ReadBalanceML, GetKeyIDML
+   - Log dettagliati per ogni errore con codice esadecimale
+
+2. **Gestione errori migliorata:**
+   - Counter e balance ritornano null se la lettura fallisce
+   - Inclusi codici errore nella risposta per debug
+
+3. **Log status broadcast:**
+   - Ogni invio status al relay viene loggato con tutti i valori
+   - Log separati per lettura carta automatica
+
+### Correzioni precedenti v3.3:
+
+1. **Parametro `nPIN` corretto:**
+   - Prima: `VerifyPINML(pin.Length, pin, slot)` - passava 4-8 (lunghezza)
+   - Dopo: `VerifyPINML(1, pin, slot)` - passa 1 (identificatore PIN utente)
+
+2. **Marshalling stringa PIN corretto:**
+   - Aggiunto `[MarshalAs(UnmanagedType.LPStr)]` per garantire che il PIN venga passato come puntatore a stringa ANSI null-terminated
+
+3. **Sanitizzazione input PIN:**
+   - Rimossi automaticamente spazi e caratteri non numerici dal PIN prima della verifica
 
 **Riferimento:** Documentazione ufficiale SIAE `test.c` riga 233:
 ```c
 res=pVerifyPINML(1, (char*) pin, slot);
 ```
 
-**IMPORTANTE:** Devi ricompilare per applicare questa correzione!
+**IMPORTANTE:** Devi ricompilare per applicare queste correzioni!
 
 ---
 
