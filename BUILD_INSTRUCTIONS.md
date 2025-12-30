@@ -1,5 +1,54 @@
 # 🔧 ISTRUZIONI DI BUILD - Event Four You SIAE Lettore
 
+## ✅ NUOVA FUNZIONALITÀ v1.0.6 (Dicembre 2024)
+
+**Funzionalità:** Auto-riconnessione e Cambio PIN
+
+### Cosa fa:
+1. **Auto-riconnessione migliorata:** 
+   - Heartbeat più veloce (15s invece di 30s) per rilevare disconnessioni
+   - Exponential backoff (1s → 2s → 4s → ... → max 30s) per riconnessioni
+   - Si riconnette automaticamente dopo deploy del server
+   
+2. **Cambio PIN dalla app:**
+   - Nuovo bottone "Cambia PIN" nel pannello carta
+   - Dialog con validazione: PIN attuale, nuovo PIN, conferma
+   - Feedback chiaro su successo/errore
+
+### Modifiche:
+- **main.js:** Logica reconnect con exponential backoff
+- **renderer.js:** Dialog cambio PIN
+- **preload.js:** API changePin esposta
+- **index.html:** Bottone "Cambia PIN"
+
+---
+
+## ✅ NUOVA FUNZIONALITÀ v1.0.5 (Dicembre 2024)
+
+**Funzionalità:** Estrazione email dal certificato X.509 della smart card
+
+### Cosa fa:
+- Legge il certificato PKI dalla smart card InfoCert
+- Estrae l'email dal campo Subject Alternative Name (SAN) o dal Subject
+- Invia `cardEmail`, `cardCertificateCN`, `cardCertificateExpiry` allo status
+- L'email è quella dove SIAE invia le risposte ai report C1
+
+### Modifiche:
+1. **SiaeBridge/Program.cs:** Aggiunto comando `GET_CERTIFICATE`
+2. **main.js:** Chiama GET_CERTIFICATE dopo READ_CARD quando il PIN è verificato
+
+### Per aggiornare:
+```powershell
+cd desktop-app
+git pull origin main
+cd SiaeBridge
+dotnet build -c Release
+cd ..
+npm start
+```
+
+---
+
 ## ✅ BUG FIX v3.9 (Dicembre 2024)
 
 **Problema:** Initialize ritorna 3 ripetutamente durante CHECK_READER
