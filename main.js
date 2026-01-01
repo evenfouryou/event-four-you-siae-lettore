@@ -1379,6 +1379,49 @@ async function handleRelayCommand(msg) {
       }
       break;
     
+    case 'READ_EFFF':
+      // Server requests EFFF data from Smart Card
+      try {
+        const efffRequestId = msg.requestId;
+        log.info(`[EFFF] EFFF read request received from server, requestId=${efffRequestId}`);
+        
+        if (!bridgeProcess) {
+          throw new Error('Bridge non avviato');
+        }
+        if (!currentStatus.cardInserted) {
+          throw new Error('Smart Card non inserita');
+        }
+        
+        const result = await sendBridgeCommand('READ_EFFF');
+        log.info(`[EFFF] EFFF read result:`, result);
+        
+        if (relayWs && relayWs.readyState === WebSocket.OPEN) {
+          relayWs.send(JSON.stringify({
+            type: 'EFFF_RESPONSE',
+            requestId: efffRequestId,
+            payload: {
+              success: result.success || false,
+              efffData: result.efffData || null,
+              isTestCard: result.isTestCard || false,
+              error: result.error
+            }
+          }));
+        }
+      } catch (err) {
+        log.error(`[EFFF] Error reading EFFF: ${err.message}`);
+        if (relayWs && relayWs.readyState === WebSocket.OPEN) {
+          relayWs.send(JSON.stringify({
+            type: 'EFFF_RESPONSE',
+            requestId: msg.requestId,
+            payload: {
+              success: false,
+              error: err.message
+            }
+          }));
+        }
+      }
+      break;
+    
     case 'verifyPin':
       // PIN verification from web client
       try {
@@ -1821,6 +1864,28 @@ ipcMain.handle('bridge:computeSigillo', async (event, data) => {
   }
 });
 
+ipcMain.handle('bridge:getCertificate', async () => {
+  log.info('IPC: getCertificate');
+  try {
+    return await sendBridgeCommand('GET_CERTIFICATE');
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('bridge:readEfff', async () => {
+  log.info('IPC: readEfff');
+  try {
+    return await sendBridgeCommand('READ_EFFF');
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+ipcMain.handle('app:getVersion', () => {
+  return app.getVersion();
+});
+
 ipcMain.handle('app:getLogPath', () => {
   return log.transports.file.getFile().path;
 });
@@ -2017,10 +2082,14 @@ ipcMain.handle('pin:changePin', async (event, { oldPin, newPin }) => {
   }
 });
 
-ipcMain.handle('pin:unlockWithPuk', async (event, { puk, newPin }) => {
-  log.info('IPC: pin:unlockWithPuk');
+ipcMain.handle('pin:unlockWithPuk', async (event, { puk, newPin, pinNumber = 1 }) => {
+  log.info(`IPC: pin:unlockWithPuk (pinNumber=${pinNumber})`);
   try {
-    const result = await sendBridgeCommand(`UNLOCK_PUK:${puk},${newPin}`);
+    // Format: pinNumber,puk,newPin for explicit PIN selection, or puk,newPin for default PIN1
+    const command = pinNumber !== 1 
+      ? `UNLOCK_PUK:${pinNumber},${puk},${newPin}` 
+      : `UNLOCK_PUK:${puk},${newPin}`;
+    const result = await sendBridgeCommand(command);
     log.info('PUK unlock result:', result);
     
     if (result.unlocked) {

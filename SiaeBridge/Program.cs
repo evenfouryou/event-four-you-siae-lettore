@@ -164,6 +164,7 @@ namespace SiaeBridge
                 if (cmd == "EXIT") { Environment.Exit(0); return OK("BYE"); }
                 if (cmd == "CHECK_READER") return CheckReader();
                 if (cmd == "READ_CARD") return ReadCard();
+                if (cmd == "READ_EFFF") return ReadEfff();
                 if (cmd == "GET_CERTIFICATE") return GetCertificate();
                 if (cmd == "GET_RETRIES") return GetRetries();
                 if (cmd.StartsWith("VERIFY_PIN:")) return VerifyPin(cmd.Substring(11));
@@ -399,6 +400,144 @@ namespace SiaeBridge
                     }
                     catch { }
                 }
+            }
+        }
+
+        // ============================================================
+        // READ EFFF - Legge file EFFF dalla Smart Card SIAE
+        // Contiene 15 campi anagrafici (DF 11 11, EF FF)
+        // Conforme a Descrizione_contenuto_SmartCardTestxBA-V102.pdf
+        // ============================================================
+        static string ReadEfff()
+        {
+            if (_slot < 0) return ERR("Nessuna carta rilevata - prima fai CHECK_READER");
+
+            bool tx = false;
+            try
+            {
+                Log($"ReadEfff: slot={_slot}");
+
+                int state = isCardIn(_slot);
+                Log($"  isCardIn({_slot}) = {state} ({DecodeCardState(state)})");
+                if (!IsCardPresent(state))
+                {
+                    _slot = -1;
+                    return ERR("Carta rimossa");
+                }
+
+                int init = Initialize(_slot);
+                Log($"  Initialize = {init}");
+
+                int txResult = BeginTransactionML(_slot);
+                Log($"  BeginTransactionML = {txResult}");
+                tx = (txResult == 0);
+
+                // Navigate to DF PKI (0x1111) which contains EFFF
+                int sel0000 = LibSiae.SelectML(0x0000, _slot);
+                Log($"  SelectML(0x0000 root) = {sel0000} (0x{sel0000:X4})");
+                
+                int sel1111 = LibSiae.SelectML(0x1111, _slot);
+                Log($"  SelectML(0x1111 DF PKI) = {sel1111} (0x{sel1111:X4})");
+                
+                // Select EF FF (anagrafica file) - File ID is 0xEFFF per SIAE documentation
+                int selEFFF = LibSiae.SelectML(0xEFFF, _slot);
+                Log($"  SelectML(0xEFFF EF FF) = {selEFFF} (0x{selEFFF:X4})");
+
+                if (selEFFF != 0)
+                {
+                    // Fallback: try 0x00FF in case card uses alternative addressing
+                    selEFFF = LibSiae.SelectML(0x00FF, _slot);
+                    Log($"  SelectML(0x00FF alt) = {selEFFF} (0x{selEFFF:X4})");
+                }
+
+                // EFFF contains 15 variable-length records
+                // Field lengths according to specification:
+                // 1. systemId (8), 2. contactName (40), 3. contactLastName (40), 4. contactCodFis (18)
+                // 5. systemLocation (100), 6. contactEmail (50), 7. siaeEmail (40)
+                // 8. partnerName (60), 9. partnerCodFis (18), 10. partnerRegistroImprese (18)
+                // 11. partnerNation (2), 12. systemApprCode (20), 13. systemApprDate (20)
+                // 14. contactRepresentationType (1), 15. userDataFileVersion (5)
+
+                var efffData = new
+                {
+                    systemId = ReadEfffField(1, 8),
+                    contactName = ReadEfffField(2, 40),
+                    contactLastName = ReadEfffField(3, 40),
+                    contactCodFis = ReadEfffField(4, 18),
+                    systemLocation = ReadEfffField(5, 100),
+                    contactEmail = ReadEfffField(6, 50),
+                    siaeEmail = ReadEfffField(7, 40),
+                    partnerName = ReadEfffField(8, 60),
+                    partnerCodFis = ReadEfffField(9, 18),
+                    partnerRegistroImprese = ReadEfffField(10, 18),
+                    partnerNation = ReadEfffField(11, 2),
+                    systemApprCode = ReadEfffField(12, 20),
+                    systemApprDate = ReadEfffField(13, 20),
+                    contactRepresentationType = ReadEfffField(14, 1),
+                    userDataFileVersion = ReadEfffField(15, 5)
+                };
+
+                Log($"  EFFF Data read: systemId={efffData.systemId}, siaeEmail={efffData.siaeEmail}");
+
+                // Determine if test card based on systemId prefix
+                bool isTestCard = !string.IsNullOrEmpty(efffData.systemId) && 
+                                  efffData.systemId.ToUpper().StartsWith("P");
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    efffData = efffData,
+                    isTestCard = isTestCard,
+                    environment = isTestCard ? "test" : "production",
+                    slot = _slot
+                });
+            }
+            catch (Exception ex)
+            {
+                Log($"ReadEfff error: {ex.Message}");
+                return ERR(ex.Message);
+            }
+            finally
+            {
+                if (tx)
+                {
+                    try
+                    {
+                        EndTransactionML(_slot);
+                        Log("  EndTransactionML done");
+                    }
+                    catch { }
+                }
+            }
+        }
+
+        /// <summary>
+        /// Read a single field from EFFF file by record number
+        /// </summary>
+        static string ReadEfffField(int recordNumber, int maxLen)
+        {
+            try
+            {
+                byte[] buffer = new byte[maxLen + 2]; // Extra bytes for safety
+                int len = buffer.Length;
+                
+                int result = LibSiae.ReadRecordML(recordNumber, buffer, ref len, _slot);
+                
+                if (result != 0)
+                {
+                    Log($"    ReadRecordML({recordNumber}) = 0x{result:X4}, len={len}");
+                    return "";
+                }
+
+                // Trim null bytes and convert to string
+                string value = Encoding.ASCII.GetString(buffer, 0, len).TrimEnd('\0', ' ');
+                Log($"    Record {recordNumber}: \"{value}\" (len={len})");
+                return value;
+            }
+            catch (Exception ex)
+            {
+                Log($"    ReadEfffField({recordNumber}) error: {ex.Message}");
+                return "";
             }
         }
 
@@ -698,20 +837,36 @@ namespace SiaeBridge
 
         // ============================================================
         // CHANGE PIN - Cambio PIN della carta SIAE
+        // Formato: oldPin,newPin oppure pinNumber,oldPin,newPin
+        // SIAE cards have PIN1 (nPIN=1) for Sigillo and PIN2 (nPIN=2) for PKI
         // ============================================================
         static string ChangePin(string args)
         {
             if (_slot < 0) return ERR("Nessuna carta rilevata - prima fai CHECK_READER");
 
-            // Formato: oldPin,newPin
+            // Parse arguments: oldPin,newPin OR pinNumber,oldPin,newPin
             var parts = args.Split(',');
-            if (parts.Length != 2)
-            {
-                return ERR("Formato: CHANGE_PIN:oldPin,newPin");
-            }
+            int pinNumber = 1; // Default to PIN1 (Sigillo)
+            string oldPin, newPin;
 
-            string oldPin = new string(parts[0].Where(char.IsDigit).ToArray());
-            string newPin = new string(parts[1].Where(char.IsDigit).ToArray());
+            if (parts.Length == 2)
+            {
+                oldPin = new string(parts[0].Where(char.IsDigit).ToArray());
+                newPin = new string(parts[1].Where(char.IsDigit).ToArray());
+            }
+            else if (parts.Length == 3)
+            {
+                if (!int.TryParse(parts[0], out pinNumber) || (pinNumber != 1 && pinNumber != 2))
+                {
+                    return ERR("Numero PIN non valido - deve essere 1 (Sigillo) o 2 (PKI)");
+                }
+                oldPin = new string(parts[1].Where(char.IsDigit).ToArray());
+                newPin = new string(parts[2].Where(char.IsDigit).ToArray());
+            }
+            else
+            {
+                return ERR("Formato: CHANGE_PIN:oldPin,newPin oppure CHANGE_PIN:pinNumber,oldPin,newPin");
+            }
 
             if (oldPin.Length < 4 || oldPin.Length > 8)
             {
@@ -725,7 +880,7 @@ namespace SiaeBridge
             bool tx = false;
             try
             {
-                Log($"ChangePin: slot={_slot}, oldPin=****, newPin=****");
+                Log($"ChangePin: slot={_slot}, pinNumber={pinNumber}, oldPin=****, newPin=****");
 
                 int state = isCardIn(_slot);
                 if (!IsCardPresent(state))
@@ -744,16 +899,34 @@ namespace SiaeBridge
                 Log($"  BeginTransactionML = {txResult}");
                 tx = (txResult == 0);
 
-                // Seleziona root e DF Sigilli
+                // Select appropriate DF based on PIN number
+                // PIN1 = DF Sigilli (0x1112), PIN2 = DF PKI (0x1111)
                 int sel0000 = LibSiae.SelectML(0x0000, _slot);
                 Log($"  SelectML(0x0000) = {sel0000}");
                 
-                int sel1112 = LibSiae.SelectML(0x1112, _slot);
-                Log($"  SelectML(0x1112) = {sel1112}");
+                int selDF;
+                if (pinNumber == 1)
+                {
+                    selDF = LibSiae.SelectML(0x1112, _slot);
+                    Log($"  SelectML(0x1112 DF Sigilli) = {selDF}");
+                }
+                else
+                {
+                    selDF = LibSiae.SelectML(0x1111, _slot);
+                    Log($"  SelectML(0x1111 DF PKI) = {selDF}");
+                }
 
-                // Cambio PIN
-                int result = LibSiae.ChangePINML(1, oldPin, newPin, _slot);
-                Log($"  ChangePINML(nPIN=1) = {result} (0x{result:X4})");
+                // Change PIN
+                int result = LibSiae.ChangePINML(pinNumber, oldPin, newPin, _slot);
+                Log($"  ChangePINML(nPIN={pinNumber}) = {result} (0x{result:X4})");
+
+                // Decode retries from error code 0x63CX
+                int? retriesRemaining = null;
+                if (result >= 0x63C0 && result <= 0x63CF)
+                {
+                    retriesRemaining = result & 0x0F;
+                    Log($"  Retries remaining: {retriesRemaining}");
+                }
 
                 if (result == 0)
                 {
@@ -761,17 +934,32 @@ namespace SiaeBridge
                     {
                         success = true,
                         changed = true,
-                        message = "PIN cambiato con successo"
+                        pinNumber = pinNumber,
+                        message = $"PIN{pinNumber} cambiato con successo"
                     });
                 }
-                else if (result == 0x6982 || result == 0x6983)
+                else if (result == 0x6983)
                 {
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,
                         changed = false,
-                        error = result == 0x6983 ? "PIN bloccato" : "PIN attuale errato",
-                        errorCode = result
+                        pinNumber = pinNumber,
+                        error = $"PIN{pinNumber} bloccato - usare PUK per sbloccare",
+                        errorCode = result,
+                        retriesRemaining = 0
+                    });
+                }
+                else if (result == 0x6982 || (result >= 0x63C0 && result <= 0x63CF))
+                {
+                    return JsonConvert.SerializeObject(new
+                    {
+                        success = true,
+                        changed = false,
+                        pinNumber = pinNumber,
+                        error = "PIN attuale errato",
+                        errorCode = result,
+                        retriesRemaining = retriesRemaining
                     });
                 }
                 else
@@ -780,7 +968,8 @@ namespace SiaeBridge
                     {
                         success = true,
                         changed = false,
-                        error = $"Errore cambio PIN: 0x{result:X4}",
+                        pinNumber = pinNumber,
+                        error = $"Errore cambio PIN{pinNumber}: 0x{result:X4} - {LibSiae.GetErrorMessage(result)}",
                         errorCode = result
                     });
                 }
@@ -806,20 +995,37 @@ namespace SiaeBridge
 
         // ============================================================
         // UNLOCK PUK - Sblocco carta con PUK
+        // Formato: puk,newPin oppure pinNumber,puk,newPin
+        // SIAE cards have PIN1 (nPIN=1) for Sigillo and PIN2 (nPIN=2) for PKI
+        // PUK is used to unlock blocked PINs and set a new PIN
         // ============================================================
         static string UnlockPuk(string args)
         {
             if (_slot < 0) return ERR("Nessuna carta rilevata - prima fai CHECK_READER");
 
-            // Formato: puk,newPin
+            // Parse arguments: puk,newPin OR pinNumber,puk,newPin
             var parts = args.Split(',');
-            if (parts.Length != 2)
-            {
-                return ERR("Formato: UNLOCK_PUK:puk,newPin");
-            }
+            int pinNumber = 1; // Default to PIN1 (Sigillo)
+            string puk, newPin;
 
-            string puk = new string(parts[0].Where(char.IsDigit).ToArray());
-            string newPin = new string(parts[1].Where(char.IsDigit).ToArray());
+            if (parts.Length == 2)
+            {
+                puk = new string(parts[0].Where(char.IsDigit).ToArray());
+                newPin = new string(parts[1].Where(char.IsDigit).ToArray());
+            }
+            else if (parts.Length == 3)
+            {
+                if (!int.TryParse(parts[0], out pinNumber) || (pinNumber != 1 && pinNumber != 2))
+                {
+                    return ERR("Numero PIN non valido - deve essere 1 (Sigillo) o 2 (PKI)");
+                }
+                puk = new string(parts[1].Where(char.IsDigit).ToArray());
+                newPin = new string(parts[2].Where(char.IsDigit).ToArray());
+            }
+            else
+            {
+                return ERR("Formato: UNLOCK_PUK:puk,newPin oppure UNLOCK_PUK:pinNumber,puk,newPin");
+            }
 
             if (puk.Length != 8)
             {
@@ -833,7 +1039,7 @@ namespace SiaeBridge
             bool tx = false;
             try
             {
-                Log($"UnlockPuk: slot={_slot}, puk=********, newPin=****");
+                Log($"UnlockPuk: slot={_slot}, pinNumber={pinNumber}, puk=********, newPin=****");
 
                 int state = isCardIn(_slot);
                 if (!IsCardPresent(state))
@@ -852,16 +1058,34 @@ namespace SiaeBridge
                 Log($"  BeginTransactionML = {txResult}");
                 tx = (txResult == 0);
 
-                // Seleziona root e DF Sigilli
+                // Select appropriate DF based on PIN number
+                // PIN1 = DF Sigilli (0x1112), PIN2 = DF PKI (0x1111)
                 int sel0000 = LibSiae.SelectML(0x0000, _slot);
                 Log($"  SelectML(0x0000) = {sel0000}");
                 
-                int sel1112 = LibSiae.SelectML(0x1112, _slot);
-                Log($"  SelectML(0x1112) = {sel1112}");
+                int selDF;
+                if (pinNumber == 1)
+                {
+                    selDF = LibSiae.SelectML(0x1112, _slot);
+                    Log($"  SelectML(0x1112 DF Sigilli) = {selDF}");
+                }
+                else
+                {
+                    selDF = LibSiae.SelectML(0x1111, _slot);
+                    Log($"  SelectML(0x1111 DF PKI) = {selDF}");
+                }
 
-                // Sblocco con PUK
-                int result = LibSiae.UnblockPINML(1, puk, newPin, _slot);
-                Log($"  UnblockPINML(nPIN=1) = {result} (0x{result:X4})");
+                // Unlock PIN with PUK
+                int result = LibSiae.UnblockPINML(pinNumber, puk, newPin, _slot);
+                Log($"  UnblockPINML(nPIN={pinNumber}) = {result} (0x{result:X4})");
+
+                // Decode retries from error code 0x63CX
+                int? pukRetriesRemaining = null;
+                if (result >= 0x63C0 && result <= 0x63CF)
+                {
+                    pukRetriesRemaining = result & 0x0F;
+                    Log($"  PUK retries remaining: {pukRetriesRemaining}");
+                }
 
                 if (result == 0)
                 {
@@ -869,7 +1093,8 @@ namespace SiaeBridge
                     {
                         success = true,
                         unlocked = true,
-                        message = "Carta sbloccata con successo"
+                        pinNumber = pinNumber,
+                        message = $"PIN{pinNumber} sbloccato con successo - nuovo PIN impostato"
                     });
                 }
                 else if (result == 0x6983)
@@ -878,18 +1103,22 @@ namespace SiaeBridge
                     {
                         success = true,
                         unlocked = false,
-                        error = "PUK bloccato - carta non recuperabile",
-                        errorCode = result
+                        pinNumber = pinNumber,
+                        error = "PUK bloccato - carta non recuperabile, contattare SIAE per sostituzione",
+                        errorCode = result,
+                        pukRetriesRemaining = 0
                     });
                 }
-                else if (result == 0x6982)
+                else if (result == 0x6982 || (result >= 0x63C0 && result <= 0x63CF))
                 {
                     return JsonConvert.SerializeObject(new
                     {
                         success = true,
                         unlocked = false,
+                        pinNumber = pinNumber,
                         error = "PUK errato",
-                        errorCode = result
+                        errorCode = result,
+                        pukRetriesRemaining = pukRetriesRemaining
                     });
                 }
                 else
@@ -898,7 +1127,8 @@ namespace SiaeBridge
                     {
                         success = true,
                         unlocked = false,
-                        error = $"Errore sblocco PUK: 0x{result:X4}",
+                        pinNumber = pinNumber,
+                        error = $"Errore sblocco PIN{pinNumber}: 0x{result:X4} - {LibSiae.GetErrorMessage(result)}",
                         errorCode = result
                     });
                 }
