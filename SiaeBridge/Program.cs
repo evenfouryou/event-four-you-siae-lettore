@@ -3,6 +3,9 @@ using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Security.Cryptography;
+using System.Security.Cryptography.Pkcs;
+using System.Security.Cryptography.X509Certificates;
 using Newtonsoft.Json;
 
 namespace SiaeBridge
@@ -1323,7 +1326,8 @@ namespace SiaeBridge
         }
 
         // ============================================================
-        // SIGN XML - Firma digitale XML usando la chiave PKI della smart card SIAE
+        // SIGN XML - Firma digitale CAdES-BES con SHA-256
+        // Produce file P7M conforme ai requisiti SIAE
         // Usato per i report C1 da inviare a SIAE
         // ============================================================
         static string SignXml(string json)
@@ -1342,7 +1346,7 @@ namespace SiaeBridge
                     return ERR("Contenuto XML mancante");
                 }
 
-                Log($"SignXml: slot={_slot}, xmlLength={xmlContent?.Length ?? 0}");
+                Log($"SignXml (CAdES-BES): slot={_slot}, xmlLength={xmlContent?.Length ?? 0}");
 
                 int state = isCardIn(_slot);
                 if (!IsCardPresent(state))
@@ -1369,7 +1373,7 @@ namespace SiaeBridge
                 int sel1111 = LibSiae.SelectML(0x1111, _slot);
                 Log($"  SelectML(0x1111 DF PKI) = {sel1111} (0x{sel1111:X4})");
 
-                // Verify PIN if provided
+                // Verify PIN if provided (using libSIAE to unlock the card)
                 if (!string.IsNullOrEmpty(pin))
                 {
                     pin = new string(pin.Where(char.IsDigit).ToArray());
@@ -1394,80 +1398,34 @@ namespace SiaeBridge
                     Log($"  WARNING: No PIN provided for signature operation");
                 }
 
-                // Step 1: Get the correct key ID from the smart card (as per libSIAE documentation)
-                byte keyId = LibSiae.GetKeyIDML(_slot);
-                Log($"  GetKeyIDML = {keyId} (0x{keyId:X2})");
-                
-                if (keyId == 0)
-                {
-                    return ERR("GetKeyID ha restituito 0 - nessuna chiave di firma disponibile");
-                }
-
-                // Step 2: Calculate SHA-1 hash of the XML content
+                // Convert XML to UTF-8 bytes
                 byte[] xmlBytes = Encoding.UTF8.GetBytes(xmlContent);
-                byte[] hash = new byte[20]; // SHA-1 produces 20 bytes
-                
-                int hashResult = LibSiae.Hash(1, xmlBytes, xmlBytes.Length, hash); // 1 = SHA-1
-                Log($"  Hash(SHA-1) = {hashResult}, hashLen={hash.Length}");
-                
-                if (hashResult != 0)
+                Log($"  XML bytes: {xmlBytes.Length}");
+
+                // ============================================================
+                // NUOVO: Usa CAdES-BES con SHA-256 invece di XMLDSig con SHA-1
+                // ============================================================
+                var (success, p7mBase64, error, signedAt) = CreateCAdESSignature(xmlBytes, pin);
+
+                if (!success)
                 {
-                    return ERR($"Calcolo hash fallito: 0x{hashResult:X4}");
+                    return ERR(error ?? "Errore sconosciuto nella firma CAdES");
                 }
 
-                // Step 3: Apply PKCS#1 padding (output 128 bytes as per libSIAE documentation)
-                byte[] paddedHash = new byte[128];
-                int padResult = LibSiae.Padding(hash, hash.Length, paddedHash);
-                Log($"  Padding = {padResult} (0x{padResult:X4})");
-                
-                if (padResult != 0)
-                {
-                    return ERR($"Padding fallito: 0x{padResult:X4}");
-                }
+                Log($"  ✓ CAdES-BES signature created successfully");
 
-                // Step 4: Sign the padded hash using the card's private key
-                byte[] signature = new byte[128]; // RSA 1024-bit signature = 128 bytes
-                int signResult = LibSiae.SignML(keyId, paddedHash, signature, _slot);
-                Log($"  SignML(keyIndex={keyId}) = {signResult} (0x{signResult:X4})");
-                
-                if (signResult != 0)
-                {
-                    return ERR($"Firma fallita: 0x{signResult:X4}");
-                }
-                
-                Log($"  ✓ Signature successful with keyIndex={keyId}");
-
-                // Get the certificate for inclusion in signed XML
-                byte[] cert = new byte[2048];
-                int certLen = cert.Length;
-                int certResult = LibSiae.GetCertificateML(cert, ref certLen, _slot);
-                Log($"  GetCertificateML = {certResult}, certLen={certLen}");
-                
-                string certificateData = "";
-                if (certResult == 0 && certLen > 0)
-                {
-                    byte[] actualCert = new byte[certLen];
-                    Array.Copy(cert, actualCert, certLen);
-                    certificateData = Convert.ToBase64String(actualCert);
-                }
-
-                // Create signed XML with embedded signature
-                string signatureValue = Convert.ToBase64String(signature);
-                string digestValue = Convert.ToBase64String(hash); // SHA-1 hash as DigestValue
-                string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
-                
-                // For SIAE C1 reports, we embed the signature in XML-DSig format
-                string signedXml = CreateSignedXml(xmlContent, signatureValue, certificateData, digestValue, signedAt);
-
+                // Ritorna il P7M in formato Base64
+                // Il server web salverà questo come file binario .p7m
                 return JsonConvert.SerializeObject(new
                 {
                     success = true,
                     signature = new
                     {
-                        signedXml = signedXml,
-                        signatureValue = signatureValue,
-                        certificateData = certificateData,
-                        signedAt = signedAt
+                        p7mBase64 = p7mBase64,           // File P7M firmato (CAdES-BES)
+                        signedAt = signedAt,
+                        format = "CAdES-BES",            // Formato firma
+                        algorithm = "SHA-256",           // Algoritmo hash
+                        xmlContent = xmlContent          // XML originale (per riferimento)
                     }
                 });
             }
@@ -1540,6 +1498,170 @@ namespace SiaeBridge
       </SignatureProperties>
     </Object>
   </Signature>";
+        }
+
+        // ============================================================
+        // CAdES-BES SIGNATURE - Firma conforme SIAE con SHA-256
+        // Produce file P7M binario invece di XMLDSig
+        // Richiesto per report C1 inviati a SIAE
+        // ============================================================
+
+        /// <summary>
+        /// Crea firma CAdES-BES con SHA-256 usando il certificato della Smart Card SIAE
+        /// Ritorna il file P7M firmato in Base64
+        /// </summary>
+        static (bool success, string p7mBase64, string error, string signedAt) CreateCAdESSignature(byte[] xmlBytes, string pin)
+        {
+            try
+            {
+                Log($"CreateCAdESSignature: xmlBytes.Length={xmlBytes.Length}");
+
+                // Ottieni il certificato dalla Smart Card tramite Windows Certificate Store
+                X509Certificate2 cert = GetSmartCardCertificateFromStore();
+                if (cert == null)
+                {
+                    return (false, null, "Certificato Smart Card SIAE non trovato nello store Windows", null);
+                }
+
+                Log($"  Certificate found: {cert.Subject}");
+                Log($"  Issuer: {cert.Issuer}");
+                Log($"  HasPrivateKey: {cert.HasPrivateKey}");
+
+                if (!cert.HasPrivateKey)
+                {
+                    return (false, null, "Il certificato non ha una chiave privata associata", null);
+                }
+
+                // Crea la struttura CMS/PKCS#7 per CAdES-BES
+                ContentInfo content = new ContentInfo(xmlBytes);
+                SignedCms signedCms = new SignedCms(content, false); // false = attached signature
+
+                // Configura il firmatario con SHA-256
+                CmsSigner signer = new CmsSigner(SubjectIdentifierType.IssuerAndSerialNumber, cert);
+                signer.DigestAlgorithm = new Oid("2.16.840.1.101.3.4.2.1", "SHA256"); // SHA-256 OID
+                signer.IncludeOption = X509IncludeOption.WholeChain;
+
+                // Aggiungi attributi firmati richiesti per CAdES-BES
+                // 1. Content-Type
+                Pkcs9ContentType contentType = new Pkcs9ContentType();
+                signer.SignedAttributes.Add(contentType);
+
+                // 2. Signing-Time
+                Pkcs9SigningTime signingTime = new Pkcs9SigningTime(DateTime.Now);
+                signer.SignedAttributes.Add(signingTime);
+
+                // 3. Message-Digest (calcolato automaticamente da SignedCms)
+
+                Log($"  Computing CAdES-BES signature with SHA-256...");
+
+                // Calcola la firma (richiede PIN se la Smart Card lo richiede - gestito da Windows CSP)
+                signedCms.ComputeSignature(signer, false);
+
+                Log($"  Signature computed successfully");
+
+                // Codifica il risultato in formato P7M (DER/BER)
+                byte[] p7mBytes = signedCms.Encode();
+                string p7mBase64 = Convert.ToBase64String(p7mBytes);
+                string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
+
+                Log($"  P7M size: {p7mBytes.Length} bytes");
+
+                return (true, p7mBase64, null, signedAt);
+            }
+            catch (CryptographicException cryptoEx)
+            {
+                Log($"CreateCAdESSignature crypto error: {cryptoEx.Message}");
+                
+                // Errori comuni della Smart Card
+                if (cryptoEx.Message.Contains("cancelled") || cryptoEx.Message.Contains("annullat"))
+                {
+                    return (false, null, "Operazione annullata dall'utente", null);
+                }
+                if (cryptoEx.Message.Contains("PIN") || cryptoEx.Message.Contains("pin"))
+                {
+                    return (false, null, "Errore PIN: " + cryptoEx.Message, null);
+                }
+                return (false, null, "Errore crittografico: " + cryptoEx.Message, null);
+            }
+            catch (Exception ex)
+            {
+                Log($"CreateCAdESSignature error: {ex.Message}");
+                return (false, null, ex.Message, null);
+            }
+        }
+
+        /// <summary>
+        /// Cerca il certificato della Smart Card SIAE nello store Windows
+        /// Il certificato deve avere una chiave privata (indicatore di Smart Card)
+        /// </summary>
+        static X509Certificate2 GetSmartCardCertificateFromStore()
+        {
+            Log("  Searching for SIAE Smart Card certificate in Windows store...");
+
+            // Apri lo store dei certificati personali
+            X509Store store = new X509Store(StoreName.My, StoreLocation.CurrentUser);
+            store.Open(OpenFlags.ReadOnly | OpenFlags.OpenExistingOnly);
+
+            X509Certificate2 bestMatch = null;
+
+            try
+            {
+                foreach (X509Certificate2 cert in store.Certificates)
+                {
+                    // Deve avere una chiave privata (tipico delle Smart Card)
+                    if (!cert.HasPrivateKey)
+                        continue;
+
+                    // Il certificato deve essere valido
+                    if (DateTime.Now < cert.NotBefore || DateTime.Now > cert.NotAfter)
+                        continue;
+
+                    string issuer = cert.Issuer.ToUpperInvariant();
+                    string subject = cert.Subject.ToUpperInvariant();
+
+                    Log($"    Checking cert: Subject={cert.Subject}, Issuer={cert.Issuer}");
+
+                    // Cerca certificati emessi da InfoCert, Aruba, o altri provider italiani
+                    // tipicamente usati per le carte SIAE
+                    bool isSiaeCompatible = 
+                        issuer.Contains("INFOCERT") ||
+                        issuer.Contains("ARUBA") ||
+                        issuer.Contains("ACTALIS") ||
+                        issuer.Contains("POSTE") ||
+                        issuer.Contains("NAMIRIAL") ||
+                        issuer.Contains("INTESI") ||
+                        subject.Contains("SIAE") ||
+                        issuer.Contains("SIAE");
+
+                    if (isSiaeCompatible)
+                    {
+                        Log($"    -> SIAE-compatible certificate found!");
+                        bestMatch = cert;
+                        break;
+                    }
+
+                    // Se non troviamo un match specifico, prendi il primo con chiave privata
+                    if (bestMatch == null)
+                    {
+                        bestMatch = cert;
+                    }
+                }
+            }
+            finally
+            {
+                store.Close();
+            }
+
+            if (bestMatch != null)
+            {
+                Log($"  Using certificate: {bestMatch.Subject}");
+            }
+            else
+            {
+                Log($"  No suitable certificate found in store");
+            }
+
+            return bestMatch;
         }
 
         // ============================================================
