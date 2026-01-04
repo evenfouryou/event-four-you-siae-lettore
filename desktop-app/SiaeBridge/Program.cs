@@ -2094,6 +2094,63 @@ namespace SiaeBridge
                     return ERR("Carta rimossa");
                 }
 
+                // ============================================================
+                // CORREZIONE: Estrai gli header From, To, Subject dal messaggio MIME originale
+                // Questi header devono essere FUORI dalla struttura multipart/signed
+                // per essere visibili nel client email
+                // ============================================================
+                string fromHeader = "";
+                string toHeader = "";
+                string subjectHeader = "";
+                string bodyContent = mimeContent;
+                
+                // Normalizza line endings prima di parsare
+                string normalizedInput = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
+                
+                // Trova la fine degli header (doppio CRLF)
+                int headerEnd = normalizedInput.IndexOf("\r\n\r\n");
+                if (headerEnd > 0)
+                {
+                    string headerSection = normalizedInput.Substring(0, headerEnd);
+                    string[] headerLines = headerSection.Split(new[] { "\r\n" }, StringSplitOptions.None);
+                    
+                    var bodyHeaders = new System.Collections.Generic.List<string>();
+                    
+                    foreach (string line in headerLines)
+                    {
+                        if (line.StartsWith("From:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            fromHeader = line;
+                            Log($"  Extracted: {fromHeader}");
+                        }
+                        else if (line.StartsWith("To:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            toHeader = line;
+                            Log($"  Extracted: {toHeader}");
+                        }
+                        else if (line.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase))
+                        {
+                            subjectHeader = line;
+                            Log($"  Extracted: {subjectHeader}");
+                        }
+                        else
+                        {
+                            // Mantieni gli altri header nel body da firmare
+                            bodyHeaders.Add(line);
+                        }
+                    }
+                    
+                    // Ricostruisci il body senza From/To/Subject (verranno messi fuori)
+                    string remainingBody = normalizedInput.Substring(headerEnd + 4); // +4 per "\r\n\r\n"
+                    bodyContent = string.Join("\r\n", bodyHeaders) + "\r\n\r\n" + remainingBody;
+                }
+                else
+                {
+                    Log($"  WARNING: No header section found in MIME content");
+                    bodyContent = normalizedInput;
+                }
+                // ============================================================
+
                 // Usa libSIAEp7.dll (PKCS7SignML) per creare una firma CMS/PKCS#7 valida
                 // Questa è la stessa libreria usata per CAdES-BES che funziona correttamente
                 
@@ -2103,9 +2160,9 @@ namespace SiaeBridge
                 inputFile = Path.Combine(tempDir, $"smime_input_{timestamp}.mime");
                 outputFile = Path.Combine(tempDir, $"smime_output_{timestamp}.p7s");
 
-                // Scrivi il contenuto MIME nel file input
-                File.WriteAllText(inputFile, mimeContent, Encoding.UTF8);
-                Log($"  Input file written: {inputFile} ({mimeContent.Length} bytes)");
+                // Scrivi il contenuto MIME (senza From/To/Subject) nel file input per la firma
+                File.WriteAllText(inputFile, bodyContent, Encoding.UTF8);
+                Log($"  Input file written: {inputFile} ({bodyContent.Length} bytes)");
 
                 // Pulisci PIN
                 pin = new string(pin.Where(char.IsDigit).ToArray());
@@ -2238,23 +2295,43 @@ namespace SiaeBridge
                     if (tx) try { EndTransactionML(_slot); } catch { }
                 }
 
-                // Costruisci il messaggio S/MIME multipart/signed
+                // ============================================================
+                // CORREZIONE: Costruisci il messaggio S/MIME con gli header ESTERNI
+                // Gli header From, To, Subject devono essere FUORI dalla struttura
+                // multipart/signed per essere visibili nel client email
+                // ============================================================
                 string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
                 string smimeBoundary = $"----=_smime_{Guid.NewGuid():N}";
                 string p7sBase64 = Convert.ToBase64String(p7sBytes);
 
                 var smimeBuilder = new StringBuilder();
+                
+                // PRIMA: Header esterni (From, To, Subject) - VISIBILI nel client email
+                if (!string.IsNullOrEmpty(fromHeader))
+                {
+                    smimeBuilder.Append(fromHeader + "\r\n");
+                }
+                if (!string.IsNullOrEmpty(toHeader))
+                {
+                    smimeBuilder.Append(toHeader + "\r\n");
+                }
+                if (!string.IsNullOrEmpty(subjectHeader))
+                {
+                    smimeBuilder.Append(subjectHeader + "\r\n");
+                }
+                
+                // POI: Header S/MIME
                 smimeBuilder.Append("MIME-Version: 1.0\r\n");
                 smimeBuilder.Append($"Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=\"{smimeBoundary}\"\r\n");
                 smimeBuilder.Append("\r\n");
-                smimeBuilder.Append($"--{smimeBoundary}\r\n");
                 
-                // Aggiungi il contenuto MIME originale (normalizza line endings)
-                string normalizedMime = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
-                smimeBuilder.Append(normalizedMime);
-                if (!normalizedMime.EndsWith("\r\n"))
+                // Parte 1: Contenuto originale (firmato)
+                smimeBuilder.Append($"--{smimeBoundary}\r\n");
+                smimeBuilder.Append(bodyContent);
+                if (!bodyContent.EndsWith("\r\n"))
                     smimeBuilder.Append("\r\n");
                 
+                // Parte 2: Firma PKCS#7
                 smimeBuilder.Append("\r\n");
                 smimeBuilder.Append($"--{smimeBoundary}\r\n");
                 smimeBuilder.Append("Content-Type: application/pkcs7-signature; name=\"smime.p7s\"\r\n");
@@ -2274,6 +2351,7 @@ namespace SiaeBridge
 
                 string signedMime = smimeBuilder.ToString();
                 Log($"  S/MIME message built: {signedMime.Length} bytes");
+                Log($"  Headers preserved: From={!string.IsNullOrEmpty(fromHeader)}, To={!string.IsNullOrEmpty(toHeader)}, Subject={!string.IsNullOrEmpty(subjectHeader)}");
 
                 return JsonConvert.SerializeObject(new
                 {
@@ -2307,5 +2385,6 @@ namespace SiaeBridge
                 catch { }
             }
         }
+
     }
 }
