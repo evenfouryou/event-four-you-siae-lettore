@@ -2075,9 +2075,76 @@ namespace SiaeBridge
                 string mimeContent = req.mimeContent;
                 string pin = req.pin;
 
+                // NUOVO: Supporto formato SMIMESignML con parametri separati
+                string smimeFrom = req.from;
+                string smimeTo = req.to;
+                string smimeSubject = req.subject;
+                string smimeBody = req.body;
+                string attachmentBase64 = req.attachmentBase64;
+                string attachmentName = req.attachmentName;
+
+                // Se abbiamo i nuovi parametri, costruisci il mimeContent
+                if (!string.IsNullOrEmpty(smimeFrom) && !string.IsNullOrEmpty(smimeTo))
+                {
+                    Log($"SignSmime: Using SMIMESignML format - from={smimeFrom}, to={smimeTo}");
+                    
+                    var mimeBuilder = new StringBuilder();
+                    string boundary = $"----=_Part_{Guid.NewGuid():N}";
+                    
+                    // Header email
+                    mimeBuilder.Append($"From: {smimeFrom}\r\n");
+                    mimeBuilder.Append($"To: {smimeTo}\r\n");
+                    mimeBuilder.Append($"Subject: {smimeSubject ?? "RCA Transmission"}\r\n");
+                    mimeBuilder.Append("MIME-Version: 1.0\r\n");
+                    
+                    if (!string.IsNullOrEmpty(attachmentBase64) && !string.IsNullOrEmpty(attachmentName))
+                    {
+                        // Email con allegato - multipart/mixed
+                        mimeBuilder.Append($"Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n");
+                        mimeBuilder.Append("\r\n");
+                        
+                        // Parte body
+                        mimeBuilder.Append($"--{boundary}\r\n");
+                        mimeBuilder.Append("Content-Type: text/plain; charset=utf-8\r\n");
+                        mimeBuilder.Append("Content-Transfer-Encoding: 8bit\r\n");
+                        mimeBuilder.Append("\r\n");
+                        mimeBuilder.Append(smimeBody ?? "SIAE RCA Transmission");
+                        mimeBuilder.Append("\r\n\r\n");
+                        
+                        // Parte allegato P7M
+                        mimeBuilder.Append($"--{boundary}\r\n");
+                        mimeBuilder.Append($"Content-Type: application/pkcs7-mime; name=\"{attachmentName}\"\r\n");
+                        mimeBuilder.Append("Content-Transfer-Encoding: base64\r\n");
+                        mimeBuilder.Append($"Content-Disposition: attachment; filename=\"{attachmentName}\"\r\n");
+                        mimeBuilder.Append("\r\n");
+                        
+                        // Formatta base64 in righe da 76 caratteri
+                        for (int i = 0; i < attachmentBase64.Length; i += 76)
+                        {
+                            int len = Math.Min(76, attachmentBase64.Length - i);
+                            mimeBuilder.Append(attachmentBase64.Substring(i, len));
+                            mimeBuilder.Append("\r\n");
+                        }
+                        
+                        mimeBuilder.Append($"--{boundary}--\r\n");
+                    }
+                    else
+                    {
+                        // Email senza allegato - text/plain
+                        mimeBuilder.Append("Content-Type: text/plain; charset=utf-8\r\n");
+                        mimeBuilder.Append("Content-Transfer-Encoding: 8bit\r\n");
+                        mimeBuilder.Append("\r\n");
+                        mimeBuilder.Append(smimeBody ?? "SIAE RCA Transmission");
+                        mimeBuilder.Append("\r\n");
+                    }
+                    
+                    mimeContent = mimeBuilder.ToString();
+                    Log($"  Built MIME content from SMIMESignML params: {mimeContent.Length} bytes");
+                }
+
                 if (string.IsNullOrEmpty(mimeContent))
                 {
-                    return ERR("Contenuto MIME mancante");
+                    return ERR("Contenuto MIME mancante - servono mimeContent oppure from/to/subject/body");
                 }
 
                 if (string.IsNullOrEmpty(pin))
@@ -2239,35 +2306,47 @@ namespace SiaeBridge
                 }
 
                 // Costruisci il messaggio S/MIME multipart/signed
-                // RFC 5751: Gli header From, To, Subject devono essere ESTERNI (prima di MIME-Version)
-                // per essere visibili al client email. Il contenuto firmato va dentro multipart/signed.
+                // CRITICO RFC 5751: Gli header From/To/Subject devono essere ESTERNI alla struttura multipart/signed
+                // Questi header sono visibili al client email e NON fanno parte del contenuto firmato
                 string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
                 string smimeBoundary = $"----=_smime_{Guid.NewGuid():N}";
                 string p7sBase64 = Convert.ToBase64String(p7sBytes);
 
-                // Estrai header esterni (From, To, Subject) dal contenuto MIME originale
+                // Estrai gli header esterni dal messaggio MIME originale
+                // Gli header esterni NON fanno parte della firma S/MIME - sono per il client email
+                string normalizedMime = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
+                
                 string externalFrom = "";
                 string externalTo = "";
                 string externalSubject = "";
+                string bodyMime = normalizedMime;
                 
-                var lines = mimeContent.Replace("\r\n", "\n").Split('\n');
-                foreach (var line in lines)
+                // Cerca e estrai gli header principali dal messaggio originale
+                var lines = normalizedMime.Split(new[] { "\r\n" }, StringSplitOptions.None);
+                int headerEndIndex = 0;
+                for (int i = 0; i < lines.Length; i++)
                 {
+                    var line = lines[i];
+                    if (string.IsNullOrEmpty(line))
+                    {
+                        // Fine degli header
+                        headerEndIndex = i;
+                        break;
+                    }
+                    
                     if (line.StartsWith("From:", StringComparison.OrdinalIgnoreCase))
                         externalFrom = line;
                     else if (line.StartsWith("To:", StringComparison.OrdinalIgnoreCase))
                         externalTo = line;
                     else if (line.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase))
                         externalSubject = line;
-                    else if (string.IsNullOrWhiteSpace(line))
-                        break; // Fine header section
                 }
                 
-                Log($"  External headers extracted: From={!string.IsNullOrEmpty(externalFrom)}, To={!string.IsNullOrEmpty(externalTo)}, Subject={!string.IsNullOrEmpty(externalSubject)}");
+                Log($"  External headers: From={!string.IsNullOrEmpty(externalFrom)}, To={!string.IsNullOrEmpty(externalTo)}, Subject={!string.IsNullOrEmpty(externalSubject)}");
 
                 var smimeBuilder = new StringBuilder();
                 
-                // ESTERNI: Header visibili al client email (PRIMA di MIME-Version)
+                // PRIMA: Header esterni (visibili al client email, NON firmati)
                 if (!string.IsNullOrEmpty(externalFrom))
                     smimeBuilder.Append($"{externalFrom}\r\n");
                 if (!string.IsNullOrEmpty(externalTo))
@@ -2275,13 +2354,13 @@ namespace SiaeBridge
                 if (!string.IsNullOrEmpty(externalSubject))
                     smimeBuilder.Append($"{externalSubject}\r\n");
                 
+                // DOPO: Header MIME per multipart/signed
                 smimeBuilder.Append("MIME-Version: 1.0\r\n");
                 smimeBuilder.Append($"Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=\"{smimeBoundary}\"\r\n");
                 smimeBuilder.Append("\r\n");
                 smimeBuilder.Append($"--{smimeBoundary}\r\n");
                 
-                // Aggiungi il contenuto MIME originale (normalizza line endings)
-                string normalizedMime = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
+                // Aggiungi il contenuto MIME originale (questo è il contenuto FIRMATO)
                 smimeBuilder.Append(normalizedMime);
                 if (!normalizedMime.EndsWith("\r\n"))
                     smimeBuilder.Append("\r\n");
