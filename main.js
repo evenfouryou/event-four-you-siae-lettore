@@ -1498,7 +1498,7 @@ async function handleRelayCommand(msg) {
           log.info(`[SIGNATURE] XML signed successfully`);
           
           if (relayWs && relayWs.readyState === WebSocket.OPEN) {
-            // v3.15.0: SOLO CAdES-BES con SHA-256 è accettato
+            // v3.16.2: SOLO CAdES-BES con SHA-256 è accettato
             // NO FALLBACK a XMLDSig/SHA-1 (deprecato e rifiutato da SIAE dal 2025)
             if (!result.signature.p7mBase64) {
               log.error(`[SIGNATURE] CRITICAL: No p7mBase64 in signature response - CAdES-BES failed`);
