@@ -12,30 +12,32 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '20'
+    
     - name: Setup .NET 8
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
     
-    - name: Restore dependencies
-      run: dotnet restore SiaeBridge/SiaeBridge.csproj
-    
-    - name: Build Release
-      run: dotnet build SiaeBridge/SiaeBridge.csproj -c Release
-    
-    - name: Publish
-      run: dotnet publish SiaeBridge/SiaeBridge.csproj -c Release -r win-x86 --self-contained true -o ./publish
-    
-    - name: Copy SIAE DLLs
+    - name: Build SiaeBridge (.NET)
       run: |
-        copy SiaeBridge\prebuilt\libSIAE.dll publish\
-        copy SiaeBridge\prebuilt\libSIAEp7.dll publish\
+        cd desktop-app/SiaeBridge
+        dotnet restore
+        dotnet publish -c Release -r win-x86 --self-contained true -o ../../bridge-bin
     
-    - name: Create ZIP
-      run: Compress-Archive -Path ./publish/* -DestinationPath SiaeBridge-win-x86.zip
+    - name: Install Electron dependencies
+      run: npm install
+    
+    - name: Build Electron app
+      run: npx electron-builder --win --x64
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: SiaeBridge-win-x86
-        path: SiaeBridge-win-x86.zip
+        name: SIAE-Lettore-win
+        path: dist/*.exe
