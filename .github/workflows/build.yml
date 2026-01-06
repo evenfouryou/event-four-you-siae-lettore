@@ -1,0 +1,41 @@
+name: Build and Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+      - name: Build SiaeBridge
+        run: |
+          cd SiaeBridge
+          dotnet publish -c Release -r win-x86 --self-contained true -o ../resources
+      - name: Copy DLLs
+        run: |
+          copy SiaeBridge\prebuilt\libSIAE.dll resources\
+          copy SiaeBridge\prebuilt\libSIAEp7.dll resources\
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install
+      - run: npm run build
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v1.0.${{ github.run_number }}
+          name: Release v1.0.${{ github.run_number }}
+          files: dist/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
