@@ -23,21 +23,6 @@ namespace SiaeBridge
     class Program
     {
         // ============================================================
-        // SCARD_STATE flags from Windows Smart Card API
-        // ============================================================
-        const int SCARD_STATE_UNAWARE = 0x0000;
-        const int SCARD_STATE_IGNORE = 0x0001;
-        const int SCARD_STATE_CHANGED = 0x0002;
-        const int SCARD_STATE_UNKNOWN = 0x0004;
-        const int SCARD_STATE_UNAVAILABLE = 0x0008;
-        const int SCARD_STATE_EMPTY = 0x0010;      // 16 - no card
-        const int SCARD_STATE_PRESENT = 0x0020;    // 32 - card present!
-        const int SCARD_STATE_ATRMATCH = 0x0040;
-        const int SCARD_STATE_EXCLUSIVE = 0x0080;
-        const int SCARD_STATE_INUSE = 0x0100;
-        const int SCARD_STATE_MUTE = 0x0200;
-
-        // ============================================================
         // IMPORT libSIAE.dll - StdCall calling convention (confirmed)
         // ============================================================
         private const string DLL = "libSIAE.dll";
@@ -89,21 +74,24 @@ namespace SiaeBridge
             [MarshalAs(UnmanagedType.LPStr)] string szOutputFileName,
             int bInitialize);
 
-        // SMIMESignML: Crea un messaggio S/MIME firmato (RFC822 compliant)
-        // Questa è l'API CORRETTA per email SIAE secondo Allegato C
+        // ============================================================
+        // SMIMESignML - FUNZIONE NATIVA SIAE per S/MIME conformi!
+        // Genera direttamente email RFC822 S/MIME firmate
+        // Vedi libsiaep7.h per la documentazione completa
+        // ============================================================
         [DllImport(DLL_P7, CallingConvention = CallingConvention.StdCall, CharSet = CharSet.Ansi)]
         static extern int SMIMESignML(
             [MarshalAs(UnmanagedType.LPStr)] string pin,
             uint slot,
-            [MarshalAs(UnmanagedType.LPStr)] string szOutputFilePath,
-            [MarshalAs(UnmanagedType.LPStr)] string szFrom,
-            [MarshalAs(UnmanagedType.LPStr)] string szTo,
-            [MarshalAs(UnmanagedType.LPStr)] string szSubject,
-            [MarshalAs(UnmanagedType.LPStr)] string szOtherHeaders,
-            [MarshalAs(UnmanagedType.LPStr)] string szBody,
-            [MarshalAs(UnmanagedType.LPStr)] string szAttachments,
-            uint dwFlags,
-            int bInitialize);
+            [MarshalAs(UnmanagedType.LPStr)] string szOutputFilePath,  // File output RFC822 S/MIME
+            [MarshalAs(UnmanagedType.LPStr)] string szFrom,            // Header From:
+            [MarshalAs(UnmanagedType.LPStr)] string szTo,              // Header To:
+            [MarshalAs(UnmanagedType.LPStr)] string szSubject,         // Header Subject: [opzionale]
+            [MarshalAs(UnmanagedType.LPStr)] string szOtherHeaders,    // Altri header [opzionale]
+            [MarshalAs(UnmanagedType.LPStr)] string szBody,            // Body del messaggio
+            [MarshalAs(UnmanagedType.LPStr)] string szAttachments,     // Files allegati separati da ';'
+            uint dwFlags,                                               // Flags
+            int bInitialize);                                          // Initialize (1=sì)
 
         // Windows API
         [DllImport("winscard.dll", CharSet = CharSet.Unicode)]
@@ -130,7 +118,7 @@ namespace SiaeBridge
             try { _log = new StreamWriter(logPath, true) { AutoFlush = true }; } catch { }
 
             Log("═══════════════════════════════════════════════════════");
-            Log("SiaeBridge v3.15 - S/MIME via libSIAEp7.dll + CAdES-BES SHA-256 (ETSI EN 319 122-1 compliant)");
+            Log("SiaeBridge v3.22 - FIX: SetCurrentDirectory(TEMP) per SMIMESignML tmpnam()");
             Log($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
             Log($"32-bit Process: {!Environment.Is64BitProcess}");
@@ -177,32 +165,23 @@ namespace SiaeBridge
         }
 
         // ============================================================
-        // Check if card is present using SCARD_STATE bitmask
+        // Check if card is present
         // ============================================================
         static bool IsCardPresent(int state)
         {
-            // isCardIn returns SCARD_STATE bitmask:
-            // - 0 means no readers or error
-            // - 16 (0x10) = SCARD_STATE_EMPTY = no card
-            // - 32 (0x20) = SCARD_STATE_PRESENT = card present!
-            // - Can be combined: 34 = PRESENT | CHANGED
-            return (state & SCARD_STATE_PRESENT) != 0;
+            // libSIAE.dll isCardIn() returns:
+            // - 0 = no card or no reader
+            // - 1 = card present (simple boolean, NOT a bitmask!)
+            // - Other non-zero values also indicate card present
+            return state > 0;
         }
 
         static string DecodeCardState(int state)
         {
-            if (state == 0) return "NO_READER";
-            var flags = new System.Collections.Generic.List<string>();
-            if ((state & SCARD_STATE_CHANGED) != 0) flags.Add("CHANGED");
-            if ((state & SCARD_STATE_UNKNOWN) != 0) flags.Add("UNKNOWN");
-            if ((state & SCARD_STATE_UNAVAILABLE) != 0) flags.Add("UNAVAILABLE");
-            if ((state & SCARD_STATE_EMPTY) != 0) flags.Add("EMPTY");
-            if ((state & SCARD_STATE_PRESENT) != 0) flags.Add("PRESENT");
-            if ((state & SCARD_STATE_ATRMATCH) != 0) flags.Add("ATRMATCH");
-            if ((state & SCARD_STATE_EXCLUSIVE) != 0) flags.Add("EXCLUSIVE");
-            if ((state & SCARD_STATE_INUSE) != 0) flags.Add("INUSE");
-            if ((state & SCARD_STATE_MUTE) != 0) flags.Add("MUTE");
-            return flags.Count > 0 ? string.Join("|", flags) : $"0x{state:X2}";
+            // libSIAE.dll returns simple values: 0=no card, 1=card present
+            if (state == 0) return "NO_CARD";
+            if (state == 1) return "CARD_PRESENT";
+            return $"PRESENT({state})";
         }
 
         // ============================================================
@@ -269,56 +248,55 @@ namespace SiaeBridge
                     {
                         int state = isCardIn(s);
                         string decoded = DecodeCardState(state);
-                        Log($"  isCardIn({s}) = {state} (0x{state:X2}) = {decoded}");
+                        Log($"  isCardIn({s}) = {state} = {decoded}");
 
-                        if (state == 0)
+                        // state <= 0 means no reader at this slot, stop scanning
+                        if (state <= 0)
                         {
-                            // No more readers
+                            Log($"  No reader at slot {s}, stopping scan");
                             break;
                         }
 
-                        if (IsCardPresent(state))
+                        // state > 0 means card is present (libSIAE returns 1 for card present)
+                        Log($"  ✓ CARTA PRESENTE in slot {s}!");
+
+                        // Reset card state before initialize
+                        int finRes = FinalizeML(s);
+                        Log($"  FinalizeML({s}) = {finRes}");
+                        
+                        // Try to initialize
+                        Log($"  Trying Initialize({s})...");
+                        int init = Initialize(s);
+                        Log($"  Initialize({s}) = {init} (0x{init:X4})");
+
+                        _slot = s;
+
+                        if (init == 0 || init == 3) // 0=OK, 3=already initialized
                         {
-                            Log($"  ✓ CARTA PRESENTE in slot {s}!");
-
-                            // Reset card state before initialize
-                            int finRes = FinalizeML(s);
-                            Log($"  FinalizeML({s}) = {finRes}");
-                            
-                            // Try to initialize
-                            Log($"  Trying Initialize({s})...");
-                            int init = Initialize(s);
-                            Log($"  Initialize({s}) = {init} (0x{init:X4})");
-
-                            _slot = s;
-
-                            if (init == 0 || init == 3) // 0=OK, 3=already initialized
+                            return JsonConvert.SerializeObject(new
                             {
-                                return JsonConvert.SerializeObject(new
-                                {
-                                    success = true,
-                                    readerConnected = true,
-                                    cardPresent = true,
-                                    slot = s,
-                                    cardState = decoded,
-                                    initResult = init,
-                                    message = "Carta SIAE rilevata e pronta!"
-                                });
-                            }
-                            else
+                                success = true,
+                                readerConnected = true,
+                                cardPresent = true,
+                                slot = s,
+                                cardState = decoded,
+                                initResult = init,
+                                message = "Carta SIAE rilevata e pronta!"
+                            });
+                        }
+                        else
+                        {
+                            return JsonConvert.SerializeObject(new
                             {
-                                return JsonConvert.SerializeObject(new
-                                {
-                                    success = true,
-                                    readerConnected = true,
-                                    cardPresent = true,
-                                    slot = s,
-                                    cardState = decoded,
-                                    initResult = init,
-                                    warning = $"Initialize returned 0x{init:X4}",
-                                    message = "Carta rilevata (init warning)"
-                                });
-                            }
+                                success = true,
+                                readerConnected = true,
+                                cardPresent = true,
+                                slot = s,
+                                cardState = decoded,
+                                initResult = init,
+                                warning = $"Initialize returned 0x{init:X4}",
+                                message = "Carta rilevata (init warning)"
+                            });
                         }
                     }
                     catch (Exception ex)
@@ -1853,7 +1831,15 @@ namespace SiaeBridge
                 byte[] p7mBytes = pkcs7ContentInfo.GetDerEncoded();
                 string p7mBase64 = Convert.ToBase64String(p7mBytes);
 
-                Log($"  ✓ CAdES-BES P7M created: {p7mBytes.Length} bytes");
+                // Calcola SHA-256 per diagnostica integrità trasmissione
+                using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                {
+                    byte[] hash = sha256.ComputeHash(p7mBytes);
+                    string hashHex = BitConverter.ToString(hash).Replace("-", "").ToLower();
+                    Log($"  ✓ CAdES-BES P7M created: {p7mBytes.Length} bytes");
+                    Log($"  [INTEGRITY] P7M SHA-256: {hashHex}");
+                    Log($"  [INTEGRITY] Base64 length: {p7mBase64.Length} chars");
+                }
                 Log($"  ContentType: signedData (1.2.840.113549.1.7.2)");
                 Log($"  DigestAlgorithm: SHA-256 (2.16.840.1.101.3.4.2.1)");
                 Log($"  SignatureAlgorithm: sha256WithRSAEncryption (1.2.840.113549.1.1.11)");
@@ -1945,7 +1931,15 @@ namespace SiaeBridge
                 string p7mBase64 = Convert.ToBase64String(p7mBytes);
                 string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
 
-                Log($"  ✓ P7M created successfully: {p7mBytes.Length} bytes");
+                // Calcola SHA-256 per diagnostica integrità trasmissione
+                using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                {
+                    byte[] hash = sha256.ComputeHash(p7mBytes);
+                    string hashHex = BitConverter.ToString(hash).Replace("-", "").ToLower();
+                    Log($"  ✓ P7M created successfully: {p7mBytes.Length} bytes");
+                    Log($"  [INTEGRITY] P7M SHA-256: {hashHex}");
+                    Log($"  [INTEGRITY] Base64 length: {p7mBase64.Length} chars");
+                }
 
                 return (true, p7mBase64, null, signedAt);
             }
@@ -2076,45 +2070,47 @@ namespace SiaeBridge
         // SIGN S/MIME - Firma S/MIME per email SIAE (Allegato C)
         // Per Provvedimento Agenzia Entrate 04/03/2008, sezione 1.6.1-1.6.2
         // L'email deve essere firmata S/MIME v2 con carta di attivazione
-        // Usa libSIAEp7.dll (SMIMESignML) - API CORRETTA per email RFC822
+        // 
+        // FIX 2026-01-06: Usa SMIMESignML nativo invece di PKCS7SignML + costruzione manuale
+        // SMIMESignML è la funzione SIAE che genera direttamente email RFC822 S/MIME conformi
         // ============================================================
         static string SignSmime(string json)
         {
             if (_slot < 0) return ERR("Nessuna carta rilevata - prima fai CHECK_READER");
 
+            string attachmentTempFile = null;
             string outputFile = null;
-            string attachmentFile = null;
 
             try
             {
                 dynamic req = JsonConvert.DeserializeObject(json);
-                string pin = (string)req.pin;
-                
-                // Nuovi parametri per SMIMESignML
-                string from = (string)req.from ?? "";
-                string to = (string)req.to ?? "";
-                string subject = (string)req.subject ?? "";
-                string body = (string)req.body ?? "";
-                string attachmentBase64 = (string)req.attachmentBase64 ?? "";
-                string attachmentName = (string)req.attachmentName ?? "";
-                
-                // Fallback: supporta anche il vecchio formato mimeContent
-                string mimeContent = (string)req.mimeContent ?? "";
-                
+                string pin = req.pin;
+
+                // Parametri S/MIME
+                string smimeFrom = req.from;
+                string smimeTo = req.to;
+                string smimeSubject = req.subject;
+                string smimeBody = req.body;
+                string attachmentBase64 = req.attachmentBase64;
+                string attachmentName = req.attachmentName;
+
+                // Validazioni
+                if (string.IsNullOrEmpty(smimeFrom))
+                    return ERR("Campo 'from' mancante - richiesto per S/MIME");
+                if (string.IsNullOrEmpty(smimeTo))
+                    return ERR("Campo 'to' mancante - richiesto per S/MIME");
                 if (string.IsNullOrEmpty(pin))
-                {
                     return ERR("PIN mancante - richiesto per firma S/MIME");
-                }
 
                 // Pulisci PIN
                 pin = new string(pin.Where(char.IsDigit).ToArray());
                 if (pin.Length < 4)
-                {
                     return ERR("PIN non valido - deve contenere almeno 4 cifre");
-                }
 
-                Log($"SignSmime (via SMIMESignML): slot={_slot}");
-                Log($"  From: {from}, To: {to}, Subject: {subject?.Substring(0, Math.Min(50, subject?.Length ?? 0))}...");
+                Log($"SignSmime (via SMIMESignML nativo): from={smimeFrom}, to={smimeTo}");
+                Log($"  Subject: {smimeSubject ?? "(none)"}");
+                Log($"  Body length: {smimeBody?.Length ?? 0}");
+                Log($"  Attachment: {attachmentName ?? "(none)"}, base64 length: {attachmentBase64?.Length ?? 0}");
 
                 int state = isCardIn(_slot);
                 if (!IsCardPresent(state))
@@ -2123,101 +2119,230 @@ namespace SiaeBridge
                     return ERR("Carta rimossa");
                 }
 
-                // Se abbiamo i nuovi parametri, usa SMIMESignML
-                if (!string.IsNullOrEmpty(from) && !string.IsNullOrEmpty(to))
+                // Prepara file temporanei
+                string tempDir = Path.GetTempPath();
+                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+                outputFile = Path.Combine(tempDir, $"smime_output_{timestamp}.eml");
+                
+                // Prepara allegato se presente
+                string attachments = "";
+                if (!string.IsNullOrEmpty(attachmentBase64) && !string.IsNullOrEmpty(attachmentName))
                 {
-                    // Crea file temporanei
-                    string tempDir = Path.GetTempPath();
-                    string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                    outputFile = Path.Combine(tempDir, $"smime_output_{timestamp}.eml");
+                    attachmentTempFile = Path.Combine(tempDir, attachmentName);
+                    byte[] attachmentBytes = Convert.FromBase64String(attachmentBase64);
+                    File.WriteAllBytes(attachmentTempFile, attachmentBytes);
+                    attachments = attachmentTempFile;
+                    Log($"  Attachment saved to temp: {attachmentTempFile} ({attachmentBytes.Length} bytes)");
+                }
 
-                    // Se c'è un allegato, salvalo in un file temporaneo
-                    string attachments = "";
-                    if (!string.IsNullOrEmpty(attachmentBase64) && !string.IsNullOrEmpty(attachmentName))
-                    {
-                        attachmentFile = Path.Combine(tempDir, attachmentName);
-                        byte[] attachmentBytes = Convert.FromBase64String(attachmentBase64);
-                        File.WriteAllBytes(attachmentFile, attachmentBytes);
-                        attachments = attachmentFile;
-                        Log($"  Attachment saved: {attachmentFile} ({attachmentBytes.Length} bytes)");
-                    }
+                // Body del messaggio (ASCII 7-bit come richiesto dalla documentazione)
+                string body = smimeBody ?? "SIAE RCA Transmission";
 
-                    // SMIMESignML crea direttamente un messaggio S/MIME RFC822 compliant
-                    Log($"  Calling SMIMESignML with PIN (length={pin.Length})...");
-                    int signResult = SMIMESignML(
-                        pin,
-                        (uint)_slot,
-                        outputFile,
-                        from,
-                        to,
-                        subject,
-                        "", // Altri header (opzionale)
-                        body,
-                        attachments,
-                        0, // dwFlags riservato
-                        1  // bInitialize
-                    );
-                    Log($"  SMIMESignML result: {signResult} (0x{signResult:X8})");
+                // FIX 2026-01-06: SMIMESignML usa internamente tmpnam(NULL) che crea file
+                // nella directory corrente. Se l'app è in una cartella non scrivibile
+                // (es. Program Files), la creazione fallisce con 0xFFFF.
+                // SOLUZIONE: Cambiare la directory corrente a TEMP prima della chiamata.
+                string originalDir = Directory.GetCurrentDirectory();
+                Log($"  Original working directory: {originalDir}");
+                Log($"  Changing to temp directory for SMIMESignML internal files: {tempDir}");
+                
+                try
+                {
+                    Directory.SetCurrentDirectory(tempDir);
+                    Log($"  Working directory changed to: {Directory.GetCurrentDirectory()}");
+                }
+                catch (Exception cwdEx)
+                {
+                    Log($"  WARNING: Could not change directory: {cwdEx.Message}");
+                }
 
-                    if (signResult != 0)
-                    {
-                        // Interpreta codici errore smart card
-                        if (signResult == 0x6983 || signResult == unchecked((int)0x80100068))
-                            return ERR("PIN bloccato - troppi tentativi errati. Usa PUK per sbloccare.");
-                        else if (signResult == 0x6982)
-                            return ERR("PIN errato - autenticazione fallita");
-                        else if (signResult >= 0x63C0 && signResult <= 0x63CF)
-                            return ERR($"PIN errato - tentativi rimasti: {signResult & 0x0F}");
-                        else
-                            return ERR($"Firma S/MIME fallita: errore 0x{signResult:X8}");
-                    }
+                // Chiama SMIMESignML - funzione SIAE nativa per S/MIME conforme
+                Log($"  Calling SMIMESignML...");
+                Log($"    pin=***, slot={_slot}");
+                Log($"    outputFile={outputFile}");
+                Log($"    from={smimeFrom}");
+                Log($"    to={smimeTo}");
+                Log($"    subject={smimeSubject ?? "(null)"}");
+                Log($"    otherHeaders=(null)");
+                Log($"    body length={body.Length}");
+                Log($"    attachments={attachments}");
+                Log($"    flags=0, init=1");
 
-                    // Verifica che il file output esista
-                    if (!File.Exists(outputFile))
-                    {
-                        return ERR("File S/MIME non creato da SMIMESignML");
-                    }
+                int signResult = SMIMESignML(
+                    pin,
+                    (uint)_slot,
+                    outputFile,
+                    smimeFrom,
+                    smimeTo,
+                    smimeSubject ?? "RCA Transmission",
+                    null,           // otherHeaders (opzionale)
+                    body,
+                    attachments,    // path ai file allegati
+                    0,              // flags
+                    1               // bInitialize
+                );
 
-                    // Leggi il messaggio S/MIME firmato
-                    string signedMime = File.ReadAllText(outputFile, Encoding.UTF8);
-                    Log($"  S/MIME message read: {signedMime.Length} bytes");
+                Log($"  SMIMESignML result: {signResult} (0x{signResult:X8})");
+                
+                // Ripristina directory originale
+                try
+                {
+                    Directory.SetCurrentDirectory(originalDir);
+                    Log($"  Restored working directory: {Directory.GetCurrentDirectory()}");
+                }
+                catch (Exception restoreEx)
+                {
+                    Log($"  WARNING: Could not restore directory: {restoreEx.Message}");
+                }
 
-                    if (signedMime.Length < 100)
-                    {
-                        return ERR("Messaggio S/MIME troppo corto - probabilmente non valido");
-                    }
+                if (signResult != 0)
+                {
+                    // Interpreta codici errore smart card
+                    if (signResult == 0x6983 || signResult == unchecked((int)0x80100068))
+                        return ERR("PIN bloccato - troppi tentativi errati. Usa PUK per sbloccare.");
+                    else if (signResult == 0x6982)
+                        return ERR("PIN errato - autenticazione fallita");
+                    else if (signResult >= 0x63C0 && signResult <= 0x63CF)
+                        return ERR($"PIN errato - tentativi rimasti: {signResult & 0x0F}");
+                    else
+                        return ERR($"SMIMESignML fallito: errore 0x{signResult:X8}");
+                }
 
-                    // Estrai info certificato
-                    string signerEmail = "";
-                    string signerName = "";
-                    ExtractCertificateInfo(ref signerEmail, ref signerName);
+                // Verifica che il file output esista
+                if (!File.Exists(outputFile))
+                {
+                    return ERR("File S/MIME non creato da SMIMESignML");
+                }
 
-                    string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
+                // Leggi l'email S/MIME generata nativamente
+                string signedMime = File.ReadAllText(outputFile, Encoding.GetEncoding("ISO-8859-1"));
+                Log($"  S/MIME file read: {signedMime.Length} chars");
+
+                if (signedMime.Length < 100)
+                {
+                    return ERR("S/MIME troppo corto - probabilmente non valido");
+                }
+
+                // Log prime 15 righe per debug
+                var previewLines = signedMime.Split(new[] { "\r\n" }, StringSplitOptions.None);
+                Log($"  === S/MIME OUTPUT (prime 15 righe) ===");
+                for (int i = 0; i < Math.Min(15, previewLines.Length); i++)
+                {
+                    Log($"  {i + 1,2}: [{previewLines[i]}]");
+                }
+                Log($"  === FINE PREVIEW ===");
+
+                // Leggi il certificato per estrarre email e nome
+                string signerEmail = "";
+                string signerName = "";
+                
+                int finRes = FinalizeML(_slot);
+                int init = Initialize(_slot);
+                int txResult = BeginTransactionML(_slot);
+                bool tx = (txResult == 0);
+                
+                try
+                {
+                    LibSiae.SelectML(0x0000, _slot);
+                    LibSiae.SelectML(0x1111, _slot);
                     
-                    Log($"  S/MIME signed successfully via SMIMESignML: {signedMime.Length} bytes");
-
-                    return JsonConvert.SerializeObject(new
+                    byte[] cert = new byte[2048];
+                    int certLen = cert.Length;
+                    int certResult = LibSiae.GetCertificateML(cert, ref certLen, _slot);
+                    
+                    if (certResult == 0 && certLen > 0)
                     {
-                        success = true,
-                        signature = new
+                        byte[] actualCert = new byte[certLen];
+                        Array.Copy(cert, actualCert, certLen);
+                        
+                        var x509 = new System.Security.Cryptography.X509Certificates.X509Certificate2(actualCert);
+                        signerName = x509.GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false) ?? "";
+                        
+                        // Cerca email nel SAN (Subject Alternative Name)
+                        foreach (var ext in x509.Extensions)
                         {
-                            signedMime = signedMime,
-                            signerEmail = signerEmail,
-                            signerName = signerName,
-                            signedAt = signedAt,
-                            format = "S/MIME",
-                            algorithm = "SHA-256",
-                            method = "SMIMESignML"
+                            if (ext.Oid?.Value == "2.5.29.17")
+                            {
+                                var sanString = ext.Format(false);
+                                Log($"  SAN extension: {sanString}");
+                                
+                                // Pattern multipli per trovare email
+                                var patterns = new[] {
+                                    @"RFC822[^=]*=([^\s,]+)",
+                                    @"email:([^\s,]+)",
+                                    @"rfc822Name=([^\s,]+)"
+                                };
+                                
+                                foreach (var pattern in patterns)
+                                {
+                                    var match = System.Text.RegularExpressions.Regex.Match(sanString, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                    if (match.Success)
+                                    {
+                                        signerEmail = match.Groups[1].Value;
+                                        Log($"  Found email in SAN: {signerEmail}");
+                                        break;
+                                    }
+                                }
+                                if (!string.IsNullOrEmpty(signerEmail)) break;
+                            }
                         }
-                    });
+                        
+                        // Fallback: cerca nel Subject
+                        if (string.IsNullOrEmpty(signerEmail))
+                        {
+                            var subject = x509.Subject;
+                            Log($"  Subject: {subject}");
+                            
+                            var emailPatterns = new[] {
+                                @"E=([^\s,]+)",
+                                @"EMAIL=([^\s,]+)",
+                                @"EMAILADDRESS=([^\s,]+)"
+                            };
+                            
+                            foreach (var pattern in emailPatterns)
+                            {
+                                var match = System.Text.RegularExpressions.Regex.Match(subject, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+                                if (match.Success)
+                                {
+                                    signerEmail = match.Groups[1].Value.Trim();
+                                    Log($"  Found email in Subject: {signerEmail}");
+                                    break;
+                                }
+                            }
+                        }
+                        
+                        Log($"  Certificate: Name={signerName}, Email={signerEmail}");
+                    }
                 }
-                else
+                catch (Exception certEx)
                 {
-                    // Fallback: vecchio metodo con mimeContent (per compatibilità)
-                    // NOTA: Questo metodo è DEPRECATO e potrebbe causare errori SIAE
-                    Log($"  WARNING: Using legacy PKCS7SignML method - may cause SIAE errors!");
-                    return SignSmimeLegacy(pin, mimeContent);
+                    Log($"  Certificate parsing error: {certEx.Message}");
                 }
+                finally
+                {
+                    if (tx) try { EndTransactionML(_slot); } catch { }
+                }
+
+                // SMIMESignML ha generato direttamente l'email S/MIME conforme RFC822
+                // Non serve costruire manualmente - la libreria SIAE lo fa nativamente
+                
+                string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
+                Log($"  ✓ S/MIME nativo generato correttamente via SMIMESignML");
+
+                return JsonConvert.SerializeObject(new
+                {
+                    success = true,
+                    signature = new
+                    {
+                        signedMime = signedMime,
+                        signerEmail = signerEmail,
+                        signerName = signerName,
+                        signedAt = signedAt,
+                        format = "S/MIME",
+                        algorithm = "SHA-256",
+                        generator = "SMIMESignML-native"  // Indica che è stato generato nativamente
+                    }
+                });
             }
             catch (Exception ex)
             {
@@ -2229,184 +2354,12 @@ namespace SiaeBridge
                 // Pulisci file temporanei
                 try
                 {
+                    if (attachmentTempFile != null && File.Exists(attachmentTempFile))
+                        File.Delete(attachmentTempFile);
                     if (outputFile != null && File.Exists(outputFile))
                         File.Delete(outputFile);
-                    if (attachmentFile != null && File.Exists(attachmentFile))
-                        File.Delete(attachmentFile);
                 }
                 catch { }
-            }
-        }
-
-        // Estrae email e nome dal certificato della smart card
-        static void ExtractCertificateInfo(ref string signerEmail, ref string signerName)
-        {
-            try
-            {
-                int finRes = FinalizeML(_slot);
-                int init = Initialize(_slot);
-                int txResult = BeginTransactionML(_slot);
-                bool tx = (txResult == 0);
-
-                try
-                {
-                    LibSiae.SelectML(0x0000, _slot);
-                    LibSiae.SelectML(0x1111, _slot);
-
-                    byte[] cert = new byte[2048];
-                    int certLen = cert.Length;
-                    int certResult = LibSiae.GetCertificateML(cert, ref certLen, _slot);
-
-                    if (certResult == 0 && certLen > 0)
-                    {
-                        byte[] actualCert = new byte[certLen];
-                        Array.Copy(cert, actualCert, certLen);
-
-                        var x509 = new System.Security.Cryptography.X509Certificates.X509Certificate2(actualCert);
-                        signerName = x509.GetNameInfo(System.Security.Cryptography.X509Certificates.X509NameType.SimpleName, false) ?? "";
-
-                        // Cerca email nel SAN
-                        foreach (var ext in x509.Extensions)
-                        {
-                            if (ext.Oid?.Value == "2.5.29.17")
-                            {
-                                var sanString = ext.Format(false);
-                                var patterns = new[] { @"RFC822[^=]*=([^\s,]+)", @"email:([^\s,]+)", @"rfc822Name=([^\s,]+)" };
-                                foreach (var pattern in patterns)
-                                {
-                                    var match = System.Text.RegularExpressions.Regex.Match(sanString, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                                    if (match.Success) { signerEmail = match.Groups[1].Value; break; }
-                                }
-                                if (!string.IsNullOrEmpty(signerEmail)) break;
-                            }
-                        }
-
-                        // Fallback: Subject
-                        if (string.IsNullOrEmpty(signerEmail))
-                        {
-                            var subject = x509.Subject;
-                            var emailPatterns = new[] { @"E=([^\s,]+)", @"EMAIL=([^\s,]+)", @"EMAILADDRESS=([^\s,]+)" };
-                            foreach (var pattern in emailPatterns)
-                            {
-                                var match = System.Text.RegularExpressions.Regex.Match(subject, pattern, System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-                                if (match.Success) { signerEmail = match.Groups[1].Value.Trim(); break; }
-                            }
-                        }
-
-                        Log($"  Certificate: Name={signerName}, Email={signerEmail}");
-                    }
-                }
-                finally
-                {
-                    if (tx) try { EndTransactionML(_slot); } catch { }
-                }
-            }
-            catch (Exception ex)
-            {
-                Log($"  Certificate parsing error: {ex.Message}");
-            }
-        }
-
-        // Metodo legacy per compatibilità - DEPRECATO
-        static string SignSmimeLegacy(string pin, string mimeContent)
-        {
-            if (string.IsNullOrEmpty(mimeContent))
-            {
-                return ERR("Contenuto MIME mancante");
-            }
-
-            string inputFile = null;
-            string outputFile = null;
-
-            try
-            {
-                Log($"SignSmimeLegacy: mimeLength={mimeContent.Length}");
-
-                string tempDir = Path.GetTempPath();
-                string timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
-                inputFile = Path.Combine(tempDir, $"smime_input_{timestamp}.mime");
-                outputFile = Path.Combine(tempDir, $"smime_output_{timestamp}.p7s");
-
-                File.WriteAllText(inputFile, mimeContent, Encoding.UTF8);
-
-                Log($"  Calling PKCS7SignML (LEGACY)...");
-                int signResult = PKCS7SignML(pin, (uint)_slot, inputFile, outputFile, 1);
-                Log($"  PKCS7SignML result: {signResult} (0x{signResult:X8})");
-
-                if (signResult != 0)
-                {
-                    if (signResult == 0x6983 || signResult == unchecked((int)0x80100068))
-                        return ERR("PIN bloccato");
-                    else if (signResult == 0x6982)
-                        return ERR("PIN errato");
-                    else if (signResult >= 0x63C0 && signResult <= 0x63CF)
-                        return ERR($"PIN errato - tentativi: {signResult & 0x0F}");
-                    else
-                        return ERR($"Firma fallita: 0x{signResult:X8}");
-                }
-
-                if (!File.Exists(outputFile))
-                    return ERR("File P7S non creato");
-
-                byte[] p7sBytes = File.ReadAllBytes(outputFile);
-                if (p7sBytes.Length < 100)
-                    return ERR("Firma troppo corta");
-
-                string signerEmail = "";
-                string signerName = "";
-                ExtractCertificateInfo(ref signerEmail, ref signerName);
-
-                // Costruisci multipart/signed manualmente (NON OTTIMALE)
-                string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
-                string boundary = $"----=_smime_{Guid.NewGuid():N}";
-                string p7sBase64 = Convert.ToBase64String(p7sBytes);
-
-                var lines = mimeContent.Replace("\r\n", "\n").Split('\n');
-                string externalFrom = "", externalTo = "", externalSubject = "";
-                foreach (var line in lines)
-                {
-                    if (line.StartsWith("From:", StringComparison.OrdinalIgnoreCase)) externalFrom = line;
-                    else if (line.StartsWith("To:", StringComparison.OrdinalIgnoreCase)) externalTo = line;
-                    else if (line.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase)) externalSubject = line;
-                    else if (string.IsNullOrWhiteSpace(line)) break;
-                }
-
-                var sb = new StringBuilder();
-                if (!string.IsNullOrEmpty(externalFrom)) sb.Append($"{externalFrom}\r\n");
-                if (!string.IsNullOrEmpty(externalTo)) sb.Append($"{externalTo}\r\n");
-                if (!string.IsNullOrEmpty(externalSubject)) sb.Append($"{externalSubject}\r\n");
-                sb.Append("MIME-Version: 1.0\r\n");
-                sb.Append($"Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=\"{boundary}\"\r\n\r\n");
-                sb.Append($"--{boundary}\r\n");
-                sb.Append(mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n"));
-                if (!mimeContent.EndsWith("\n")) sb.Append("\r\n");
-                sb.Append($"\r\n--{boundary}\r\n");
-                sb.Append("Content-Type: application/pkcs7-signature; name=\"smime.p7s\"\r\n");
-                sb.Append("Content-Transfer-Encoding: base64\r\n");
-                sb.Append("Content-Disposition: attachment; filename=\"smime.p7s\"\r\n\r\n");
-                for (int i = 0; i < p7sBase64.Length; i += 76)
-                    sb.Append(p7sBase64.Substring(i, Math.Min(76, p7sBase64.Length - i)) + "\r\n");
-                sb.Append($"--{boundary}--\r\n");
-
-                return JsonConvert.SerializeObject(new
-                {
-                    success = true,
-                    signature = new
-                    {
-                        signedMime = sb.ToString(),
-                        signerEmail = signerEmail,
-                        signerName = signerName,
-                        signedAt = signedAt,
-                        format = "S/MIME",
-                        algorithm = "SHA-256",
-                        method = "PKCS7SignML_LEGACY"
-                    }
-                });
-            }
-            finally
-            {
-                try { if (inputFile != null && File.Exists(inputFile)) File.Delete(inputFile); } catch { }
-                try { if (outputFile != null && File.Exists(outputFile)) File.Delete(outputFile); } catch { }
             }
         }
     }
