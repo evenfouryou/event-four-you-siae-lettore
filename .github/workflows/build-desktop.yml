@@ -125,9 +125,3 @@ jobs:
         with:
           name: SIAE-Lettore-Installer
           path: desktop-app/dist/*.exe
-
-      - name: Upload portable
-        uses: actions/upload-artifact@v4
-        with:
-          name: SIAE-Lettore-Portable
-          path: desktop-app/dist/win-unpacked/
