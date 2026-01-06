@@ -26,7 +26,12 @@ jobs:
       run: |
         cd desktop-app/SiaeBridge
         dotnet restore
-        dotnet publish -c Release -r win-x86 --self-contained true -o ../../bridge-bin
+        dotnet publish -c Release -r win-x86 --self-contained true -o ../../SiaeBridge-build
+    
+    - name: Copy SIAE DLLs
+      run: |
+        copy desktop-app\SiaeBridge\prebuilt\libSIAE.dll SiaeBridge-build\
+        copy desktop-app\SiaeBridge\libSIAEp7.dll SiaeBridge-build\
     
     - name: Install Electron dependencies
       run: npm install
