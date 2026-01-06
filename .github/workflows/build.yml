@@ -3,9 +3,7 @@ name: Build SiaeBridge
 on:
   push:
     branches: [ main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:
 
 jobs:
   build:
@@ -19,24 +17,8 @@ jobs:
       with:
         dotnet-version: '8.0.x'
     
-    - name: Restore dependencies
-      run: dotnet restore SiaeBridge/SiaeBridge.csproj
-    
     - name: Build
-      run: dotnet build SiaeBridge/SiaeBridge.csproj -c Release --no-restore
+      run: dotnet build SiaeBridge/SiaeBridge.csproj -c Release
     
     - name: Publish
-      run: dotnet publish SiaeBridge/SiaeBridge.csproj -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -o ./publish
-    
-    - name: Upload artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: SiaeBridge-win-x86
-        path: ./publish/
-    
-    - name: Create Release
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: ./publish/*
-        generate_release_notes: true
+      run: dotnet publish SiaeBridge/SiaeBridge.csproj -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -o ./
