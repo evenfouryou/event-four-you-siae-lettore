@@ -1498,7 +1498,7 @@ async function handleRelayCommand(msg) {
           log.info(`[SIGNATURE] XML signed successfully`);
           
           if (relayWs && relayWs.readyState === WebSocket.OPEN) {
-            // v3.16.2: SOLO CAdES-BES con SHA-256 è accettato
+            // v3.15.0: SOLO CAdES-BES con SHA-256 è accettato
             // NO FALLBACK a XMLDSig/SHA-1 (deprecato e rifiutato da SIAE dal 2025)
             if (!result.signature.p7mBase64) {
               log.error(`[SIGNATURE] CRITICAL: No p7mBase64 in signature response - CAdES-BES failed`);
@@ -1568,18 +1568,9 @@ async function handleRelayCommand(msg) {
       try {
         const smimeRequestId = msg.requestId;
         const smimePayload = msg.payload || {};
-        
-        // Supporto nuovo formato SMIMESignML con parametri separati
-        const smimeFrom = smimePayload.from || '';
-        const smimeTo = smimePayload.to || '';
-        const smimeSubject = smimePayload.subject || '';
-        const smimeBody = smimePayload.body || '';
-        const attachmentBase64 = smimePayload.attachmentBase64 || '';
-        const attachmentName = smimePayload.attachmentName || '';
         const mimeContent = smimePayload.mimeContent || '';
         
-        const isNewFormat = smimeFrom && smimeTo;
-        log.info(`[S/MIME] Signature request: requestId=${smimeRequestId}, format=${isNewFormat ? 'SMIMESignML' : 'legacy'}, from=${smimeFrom}, to=${smimeTo}`);
+        log.info(`[S/MIME] Signature request: requestId=${smimeRequestId}, mimeLength=${mimeContent.length}`);
         
         // Check if bridge is ready
         if (!bridgeProcess || !currentStatus.readerConnected) {
@@ -1631,21 +1622,40 @@ async function handleRelayCommand(msg) {
         }
         
         // Execute S/MIME signature command
-        // Pass PIN if available, otherwise let the bridge handle it (card already unlocked)
-        // Supporto nuovo formato SMIMESignML con parametri separati
-        const smimeSignPayload = isNewFormat ? {
-          from: smimeFrom,
-          to: smimeTo,
-          subject: smimeSubject,
-          body: smimeBody,
-          attachmentBase64: attachmentBase64,
-          attachmentName: attachmentName,
-          pin: lastVerifiedPin || ''
-        } : { 
-          mimeContent,
-          pin: lastVerifiedPin || '' 
-        };
-        log.info(`[S/MIME] Sending SIGN_SMIME command (${isNewFormat ? 'SMIMESignML' : 'legacy'})...`);
+        // Supporta sia nuovo formato SMIMESignML che legacy mimeContent
+        const smimeSignPayload = {};
+        
+        // Nuovo formato: parametri separati per SMIMESignML
+        if (smimePayload.from && smimePayload.to) {
+          smimeSignPayload.from = smimePayload.from;
+          smimeSignPayload.to = smimePayload.to;
+          smimeSignPayload.subject = smimePayload.subject || '';
+          smimeSignPayload.body = smimePayload.body || '';
+          smimeSignPayload.attachmentBase64 = smimePayload.attachmentBase64 || '';
+          smimeSignPayload.attachmentName = smimePayload.attachmentName || '';
+          log.info(`[S/MIME] Using SMIMESignML format: from=${smimePayload.from}, to=${smimePayload.to}`);
+        } else if (mimeContent) {
+          // Fallback: legacy formato mimeContent
+          smimeSignPayload.mimeContent = mimeContent;
+          log.warn(`[S/MIME] Using LEGACY mimeContent format - may cause SIAE errors!`);
+        } else {
+          log.error(`[S/MIME] No valid payload: neither SMIMESignML params nor mimeContent provided`);
+          if (relayWs && relayWs.readyState === WebSocket.OPEN) {
+            relayWs.send(JSON.stringify({
+              type: 'SMIME_SIGNATURE_RESPONSE',
+              requestId: smimeRequestId,
+              payload: { 
+                success: false, 
+                error: 'Payload email non valido - mancano parametri' 
+              }
+            }));
+          }
+          return;
+        }
+        
+        smimeSignPayload.pin = lastVerifiedPin || '';
+        
+        log.info(`[S/MIME] Sending SIGN_SMIME command...`);
         const smimeResult = await sendBridgeCommand(`SIGN_SMIME:${JSON.stringify(smimeSignPayload)}`);
         
         if (smimeResult.success && smimeResult.signature) {
