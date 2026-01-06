@@ -2114,7 +2114,7 @@ namespace SiaeBridge
 
                 // Parametri S/MIME
                 string smimeFromRaw = req.from;
-                string smimeTo = req.to;
+                string smimeToRaw = req.to;
                 string smimeSubject = req.subject;
                 string smimeBody = req.body;
                 string attachmentBase64 = req.attachmentBase64;
@@ -2122,15 +2122,17 @@ namespace SiaeBridge
 
                 // FIX 2026-01-06: SMIMESignML richiede SOLO l'email senza nome visualizzato
                 // Input può essere: "Display Name" <email@example.com> oppure solo email@example.com
-                // Estrai solo l'indirizzo email
+                // Estrai solo l'indirizzo email per ENTRAMBI from e to
                 string smimeFrom = ExtractEmailAddress(smimeFromRaw);
+                string smimeTo = ExtractEmailAddress(smimeToRaw);
                 Log($"  From field normalization: '{smimeFromRaw}' -> '{smimeFrom}'");
+                Log($"  To field normalization: '{smimeToRaw}' -> '{smimeTo}'");
 
                 // Validazioni
                 if (string.IsNullOrEmpty(smimeFrom))
                     return ERR("Campo 'from' mancante o formato non valido - richiesto email semplice per S/MIME");
                 if (string.IsNullOrEmpty(smimeTo))
-                    return ERR("Campo 'to' mancante - richiesto per S/MIME");
+                    return ERR("Campo 'to' mancante o formato non valido - richiesto email semplice per S/MIME");
                 if (string.IsNullOrEmpty(pin))
                     return ERR("PIN mancante - richiesto per firma S/MIME");
 
