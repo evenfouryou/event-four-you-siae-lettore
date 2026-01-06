@@ -99,7 +99,7 @@ namespace SiaeBridge
             try { _log = new StreamWriter(logPath, true) { AutoFlush = true }; } catch { }
 
             Log("═══════════════════════════════════════════════════════");
-            Log("SiaeBridge v3.18 - FIX: Added DLL copy to output in .csproj (libSIAE.dll was missing)");
+            Log("SiaeBridge v3.20 - FIX: S/MIME signature integrity - no CRLF modification after signing");
             Log($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
             Log($"32-bit Process: {!Environment.Is64BitProcess}");
@@ -2103,17 +2103,21 @@ namespace SiaeBridge
                         mimeBuilder.Append($"Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n");
                         mimeBuilder.Append("\r\n");
                         
-                        // Parte body
+                        // Parte body - ISO-8859-1 per conformità SIAE Allegato C
                         mimeBuilder.Append($"--{boundary}\r\n");
-                        mimeBuilder.Append("Content-Type: text/plain; charset=utf-8\r\n");
+                        mimeBuilder.Append("Content-Type: text/plain; charset=ISO-8859-1\r\n");
                         mimeBuilder.Append("Content-Transfer-Encoding: 8bit\r\n");
                         mimeBuilder.Append("\r\n");
                         mimeBuilder.Append(smimeBody ?? "SIAE RCA Transmission");
                         mimeBuilder.Append("\r\n\r\n");
                         
-                        // Parte allegato P7M - usa application/octet-stream per file binari firmati
+                        // Parte allegato P7M - usa application/pkcs7-mime per file CAdES-BES
+                        // SIAE Allegato C richiede smime-type=signed-data per identificare correttamente il file
                         mimeBuilder.Append($"--{boundary}\r\n");
-                        mimeBuilder.Append($"Content-Type: application/octet-stream; name=\"{attachmentName}\"\r\n");
+                        string mimeType = attachmentName.EndsWith(".p7m", StringComparison.OrdinalIgnoreCase) 
+                            ? "application/pkcs7-mime; smime-type=signed-data" 
+                            : "application/octet-stream";
+                        mimeBuilder.Append($"Content-Type: {mimeType}; name=\"{attachmentName}\"\r\n");
                         mimeBuilder.Append("Content-Transfer-Encoding: base64\r\n");
                         mimeBuilder.Append($"Content-Disposition: attachment; filename=\"{attachmentName}\"\r\n");
                         mimeBuilder.Append("\r\n");
@@ -2131,7 +2135,8 @@ namespace SiaeBridge
                     else
                     {
                         // Email senza allegato - text/plain (SENZA header From/To/Subject)
-                        mimeBuilder.Append("Content-Type: text/plain; charset=utf-8\r\n");
+                        // ISO-8859-1 per conformità SIAE Allegato C
+                        mimeBuilder.Append("Content-Type: text/plain; charset=ISO-8859-1\r\n");
                         mimeBuilder.Append("Content-Transfer-Encoding: 8bit\r\n");
                         mimeBuilder.Append("\r\n");
                         mimeBuilder.Append(smimeBody ?? "SIAE RCA Transmission");
@@ -2171,8 +2176,10 @@ namespace SiaeBridge
                 outputFile = Path.Combine(tempDir, $"smime_output_{timestamp}.p7s");
 
                 // Scrivi il contenuto MIME nel file input
-                File.WriteAllText(inputFile, mimeContent, Encoding.UTF8);
-                Log($"  Input file written: {inputFile} ({mimeContent.Length} bytes)");
+                // CRITICO: Usa ISO-8859-1 (Latin-1) come richiesto da SIAE Allegato C
+                // UTF-8 con BOM causa errore 40605 "Il riepilogo risulta illegibile"
+                File.WriteAllText(inputFile, mimeContent, Encoding.GetEncoding("ISO-8859-1"));
+                Log($"  Input file written (ISO-8859-1): {inputFile} ({mimeContent.Length} bytes)");
 
                 // Pulisci PIN
                 pin = new string(pin.Where(char.IsDigit).ToArray());
@@ -2305,25 +2312,29 @@ namespace SiaeBridge
                     if (tx) try { EndTransactionML(_slot); } catch { }
                 }
 
-                // Costruisci il messaggio S/MIME multipart/signed
-                // CRITICO RFC 5751: Gli header From/To/Subject devono essere ESTERNI alla struttura multipart/signed
-                // Questi header sono visibili al client email e NON fanno parte del contenuto firmato
-                string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
-                string smimeBoundary = $"----=_smime_{Guid.NewGuid():N}";
-                string p7sBase64 = Convert.ToBase64String(p7sBytes);
-
-                // Il mimeContent costruito sopra NON contiene header From/To/Subject
-                // È già il body MIME puro che è stato firmato da PKCS7SignML
-                // Lo normalizziamo solo per garantire line endings corretti
-                string bodyMime = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
+                // ============================================================
+                // FIX 2026-01-06: Usa S/MIME OPAQUE invece di multipart/signed
+                // SIAE spesso restituisce errore 40605 con multipart/signed perché:
+                // - Problemi CRLF
+                // - Librerie che modificano il MIME dopo la firma
+                // - Boundary che cambiano
+                // 
+                // SOLUZIONE: application/pkcs7-mime; smime-type=signed-data
+                // Il contenuto firmato sta DENTRO al PKCS7 - nessun problema di sync
+                // ============================================================
                 
-                Log($"  Building S/MIME message: From={!string.IsNullOrEmpty(externalFrom)}, To={!string.IsNullOrEmpty(externalTo)}, Subject={!string.IsNullOrEmpty(externalSubject)}");
-                Log($"  Body MIME size: {bodyMime.Length} bytes (this is what was signed)");
+                string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
+                
+                // PKCS7SignML crea un SignedData "attached" - contiene contenuto + firma
+                // Lo usiamo direttamente come corpo dell'email S/MIME opaque
+                string pkcs7Base64 = Convert.ToBase64String(p7sBytes);
+                
+                Log($"  Building S/MIME OPAQUE message (application/pkcs7-mime)");
+                Log($"  P7M size: {p7sBytes.Length} bytes, Base64 size: {pkcs7Base64.Length} chars");
 
                 var smimeBuilder = new StringBuilder();
                 
-                // PRIMA: Header esterni (visibili al client email, NON firmati)
-                // Questi provengono dalle variabili salvate quando abbiamo costruito mimeContent
+                // Header esterni (NON firmati, visibili al client email)
                 if (!string.IsNullOrEmpty(externalFrom))
                     smimeBuilder.Append($"From: {externalFrom}\r\n");
                 if (!string.IsNullOrEmpty(externalTo))
@@ -2331,37 +2342,35 @@ namespace SiaeBridge
                 if (!string.IsNullOrEmpty(externalSubject))
                     smimeBuilder.Append($"Subject: {externalSubject}\r\n");
                 
-                // DOPO: Header MIME per multipart/signed
+                // S/MIME opaque: tutto il contenuto firmato è dentro il PKCS7
                 smimeBuilder.Append("MIME-Version: 1.0\r\n");
-                smimeBuilder.Append($"Content-Type: multipart/signed; protocol=\"application/pkcs7-signature\"; micalg=sha-256; boundary=\"{smimeBoundary}\"\r\n");
-                smimeBuilder.Append("\r\n");
-                smimeBuilder.Append($"--{smimeBoundary}\r\n");
-                
-                // Aggiungi il body MIME - questo è ESATTAMENTE il contenuto che è stato firmato
-                // CRITICO: bodyMime deve essere identico a ciò che è stato scritto in inputFile per PKCS7SignML
-                smimeBuilder.Append(bodyMime);
-                if (!bodyMime.EndsWith("\r\n"))
-                    smimeBuilder.Append("\r\n");
-                
-                smimeBuilder.Append("\r\n");
-                smimeBuilder.Append($"--{smimeBoundary}\r\n");
-                smimeBuilder.Append("Content-Type: application/pkcs7-signature; name=\"smime.p7s\"\r\n");
+                smimeBuilder.Append("Content-Type: application/pkcs7-mime; smime-type=signed-data; name=\"smime.p7m\"\r\n");
                 smimeBuilder.Append("Content-Transfer-Encoding: base64\r\n");
-                smimeBuilder.Append("Content-Disposition: attachment; filename=\"smime.p7s\"\r\n");
+                smimeBuilder.Append("Content-Disposition: attachment; filename=\"smime.p7m\"\r\n");
                 smimeBuilder.Append("\r\n");
                 
-                // Dividi base64 in righe da 76 caratteri
-                for (int i = 0; i < p7sBase64.Length; i += 76)
+                // Base64 in righe da 76 caratteri (standard RFC)
+                for (int i = 0; i < pkcs7Base64.Length; i += 76)
                 {
-                    int len = Math.Min(76, p7sBase64.Length - i);
-                    smimeBuilder.Append(p7sBase64.Substring(i, len));
+                    int len = Math.Min(76, pkcs7Base64.Length - i);
+                    smimeBuilder.Append(pkcs7Base64.Substring(i, len));
                     smimeBuilder.Append("\r\n");
                 }
-                
-                smimeBuilder.Append($"--{smimeBoundary}--\r\n");
 
                 string signedMime = smimeBuilder.ToString();
-                Log($"  S/MIME message built: {signedMime.Length} bytes");
+                Log($"  S/MIME OPAQUE message built: {signedMime.Length} bytes");
+                
+                // DEBUG: Log prime 25 righe per verifica CRLF e struttura
+                var debugLines = signedMime.Split(new[] { "\r\n" }, StringSplitOptions.None);
+                Log($"  === S/MIME OUTPUT (prime 25 righe) ===");
+                for (int i = 0; i < Math.Min(25, debugLines.Length); i++)
+                {
+                    string line = debugLines[i];
+                    // Tronca righe lunghe (base64) per leggibilità
+                    if (line.Length > 80) line = line.Substring(0, 77) + "...";
+                    Log($"  {i + 1,2}: [{line}]");
+                }
+                Log($"  === FINE DEBUG ===");
 
                 return JsonConvert.SerializeObject(new
                 {
