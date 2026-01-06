@@ -1,14 +1,10 @@
 {
   "name": "event-four-you-siae-lettore",
-  "version": "1.0.13",
+  "version": "3.16.3",
   "description": "Event Four You - SIAE Lettore per smart card MiniLector EVO V3",
   "main": "main.js",
   "author": "Event Four You",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/evenfouryou/event-four-you-siae-lettore.git"
-  },
   "scripts": {
     "start": "electron .",
     "build": "electron-builder --win",
@@ -33,7 +29,7 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "icon.ico",
+      "icon": "icon.png",
       "publisherName": "Event Four You"
     },
     "nsis": {
