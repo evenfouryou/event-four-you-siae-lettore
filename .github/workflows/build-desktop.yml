@@ -1,0 +1,113 @@
+name: Build SIAE Lettore
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '6.0.x'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build SiaeBridge
+        working-directory: desktop-app/SiaeBridge
+        run: |
+          echo "=== Compiling SiaeBridge (x86) ==="
+          dotnet restore
+          dotnet build -c Release
+          echo ""
+          echo "=== Output files ==="
+          dir bin\Release\net472\
+
+      - name: Copy prebuilt DLLs
+        shell: pwsh
+        run: |
+          $outDir = "desktop-app/SiaeBridge/bin/Release/net472"
+          
+          # Copy libSIAE.dll from prebuilt
+          $libSiae = "desktop-app/SiaeBridge/prebuilt/libSIAE.dll"
+          if (Test-Path $libSiae) {
+            Copy-Item $libSiae "$outDir/libSIAE.dll" -Force
+            Write-Host "✓ Copied libSIAE.dll from prebuilt"
+          } else {
+            Write-Host "✗ libSIAE.dll NOT FOUND!"
+            exit 1
+          }
+          
+          # Copy libSIAEp7.dll from prebuilt (CRITICAL for SMIMESignML/PKCS7SignML)
+          $libSiaep7 = "desktop-app/SiaeBridge/prebuilt/libSIAEp7.dll"
+          if (Test-Path $libSiaep7) {
+            Copy-Item $libSiaep7 "$outDir/libSIAEp7.dll" -Force
+            Write-Host "✓ Copied libSIAEp7.dll from prebuilt"
+          } else {
+            Write-Host "✗ libSIAEp7.dll NOT FOUND - S/MIME signing will fail!"
+            exit 1
+          }
+          
+          echo ""
+          echo "=== Final bridge files ==="
+          Get-ChildItem $outDir | Format-Table Name, Length
+
+      - name: Verify required files
+        shell: pwsh
+        run: |
+          $dir = "desktop-app/SiaeBridge/bin/Release/net472"
+          $required = @("SiaeBridge.exe", "libSIAE.dll", "libSIAEp7.dll", "Newtonsoft.Json.dll")
+          
+          $missing = @()
+          foreach ($f in $required) {
+            $path = Join-Path $dir $f
+            if (Test-Path $path) {
+              $size = (Get-Item $path).Length
+              Write-Host "✓ $f ($size bytes)"
+            } else {
+              Write-Host "✗ MISSING: $f"
+              $missing += $f
+            }
+          }
+          
+          if ($missing.Count -gt 0) {
+            Write-Host ""
+            Write-Host "ERROR: Missing required files!"
+            exit 1
+          }
+
+      - name: Install Node dependencies
+        working-directory: desktop-app
+        run: npm install
+
+      - name: Build Electron app
+        working-directory: desktop-app
+        run: npm run build
+
+      - name: List output
+        shell: pwsh
+        run: |
+          echo "=== Installer ==="
+          Get-ChildItem "desktop-app/dist" -Filter "*.exe" | Format-Table Name, Length
+
+      - name: Upload installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAE-Lettore-Installer
+          path: desktop-app/dist/*.exe
+
+      - name: Upload portable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SIAE-Lettore-Portable
+          path: desktop-app/dist/win-unpacked/
