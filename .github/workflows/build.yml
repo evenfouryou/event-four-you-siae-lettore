@@ -1,4 +1,4 @@
-name: Build SiaeBridge
+name: Build SIAE Lettore
 
 on:
   push:
@@ -12,13 +12,30 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Setup .NET
+    - name: Setup .NET 8
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
     
-    - name: Build
+    - name: Restore dependencies
+      run: dotnet restore SiaeBridge/SiaeBridge.csproj
+    
+    - name: Build Release
       run: dotnet build SiaeBridge/SiaeBridge.csproj -c Release
     
     - name: Publish
-      run: dotnet publish SiaeBridge/SiaeBridge.csproj -c Release -r win-x86 --self-contained true -p:PublishSingleFile=true -o ./
+      run: dotnet publish SiaeBridge/SiaeBridge.csproj -c Release -r win-x86 --self-contained true -o ./publish
+    
+    - name: Copy SIAE DLLs
+      run: |
+        copy SiaeBridge\prebuilt\libSIAE.dll publish\
+        copy SiaeBridge\prebuilt\libSIAEp7.dll publish\
+    
+    - name: Create ZIP
+      run: Compress-Archive -Path ./publish/* -DestinationPath SiaeBridge-win-x86.zip
+    
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: SiaeBridge-win-x86
+        path: SiaeBridge-win-x86.zip
