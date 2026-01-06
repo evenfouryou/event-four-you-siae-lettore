@@ -1,4 +1,4 @@
-nname: Build SiaeBridge
+name: Build SiaeBridge
 
 on:
   push:
