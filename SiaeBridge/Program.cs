@@ -1812,7 +1812,15 @@ namespace SiaeBridge
                 byte[] p7mBytes = pkcs7ContentInfo.GetDerEncoded();
                 string p7mBase64 = Convert.ToBase64String(p7mBytes);
 
-                Log($"  ✓ CAdES-BES P7M created: {p7mBytes.Length} bytes");
+                // Calcola SHA-256 per diagnostica integrità trasmissione
+                using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                {
+                    byte[] hash = sha256.ComputeHash(p7mBytes);
+                    string hashHex = BitConverter.ToString(hash).Replace("-", "").ToLower();
+                    Log($"  ✓ CAdES-BES P7M created: {p7mBytes.Length} bytes");
+                    Log($"  [INTEGRITY] P7M SHA-256: {hashHex}");
+                    Log($"  [INTEGRITY] Base64 length: {p7mBase64.Length} chars");
+                }
                 Log($"  ContentType: signedData (1.2.840.113549.1.7.2)");
                 Log($"  DigestAlgorithm: SHA-256 (2.16.840.1.101.3.4.2.1)");
                 Log($"  SignatureAlgorithm: sha256WithRSAEncryption (1.2.840.113549.1.1.11)");
@@ -1904,7 +1912,15 @@ namespace SiaeBridge
                 string p7mBase64 = Convert.ToBase64String(p7mBytes);
                 string signedAt = DateTime.Now.ToString("yyyy-MM-ddTHH:mm:sszzz");
 
-                Log($"  ✓ P7M created successfully: {p7mBytes.Length} bytes");
+                // Calcola SHA-256 per diagnostica integrità trasmissione
+                using (var sha256 = System.Security.Cryptography.SHA256.Create())
+                {
+                    byte[] hash = sha256.ComputeHash(p7mBytes);
+                    string hashHex = BitConverter.ToString(hash).Replace("-", "").ToLower();
+                    Log($"  ✓ P7M created successfully: {p7mBytes.Length} bytes");
+                    Log($"  [INTEGRITY] P7M SHA-256: {hashHex}");
+                    Log($"  [INTEGRITY] Base64 length: {p7mBase64.Length} chars");
+                }
 
                 return (true, p7mBase64, null, signedAt);
             }
@@ -2059,22 +2075,31 @@ namespace SiaeBridge
                 string attachmentName = req.attachmentName;
 
                 // Se abbiamo i nuovi parametri, costruisci il mimeContent
+                // CRITICO: Per S/MIME multipart/signed, il contenuto da firmare NON deve includere
+                // gli header esterni (From/To/Subject). Solo il body MIME viene firmato.
+                // Gli header esterni verranno aggiunti DOPO la firma.
+                string externalFrom = "";
+                string externalTo = "";
+                string externalSubject = "";
+                
                 if (!string.IsNullOrEmpty(smimeFrom) && !string.IsNullOrEmpty(smimeTo))
                 {
                     Log($"SignSmime: Using SMIMESignML format - from={smimeFrom}, to={smimeTo}");
                     
+                    // Salva gli header esterni per dopo (non firmati)
+                    externalFrom = smimeFrom;
+                    externalTo = smimeTo;
+                    externalSubject = smimeSubject ?? "RCA Transmission";
+                    
                     var mimeBuilder = new StringBuilder();
                     string boundary = $"----=_Part_{Guid.NewGuid():N}";
                     
-                    // Header email
-                    mimeBuilder.Append($"From: {smimeFrom}\r\n");
-                    mimeBuilder.Append($"To: {smimeTo}\r\n");
-                    mimeBuilder.Append($"Subject: {smimeSubject ?? "RCA Transmission"}\r\n");
-                    mimeBuilder.Append("MIME-Version: 1.0\r\n");
+                    // NON includere From/To/Subject qui - questi sono header esterni per il client email
+                    // Il body MIME inizia da Content-Type e include tutto il contenuto firmato
                     
                     if (!string.IsNullOrEmpty(attachmentBase64) && !string.IsNullOrEmpty(attachmentName))
                     {
-                        // Email con allegato - multipart/mixed
+                        // Email con allegato - multipart/mixed (SENZA header From/To/Subject)
                         mimeBuilder.Append($"Content-Type: multipart/mixed; boundary=\"{boundary}\"\r\n");
                         mimeBuilder.Append("\r\n");
                         
@@ -2086,9 +2111,9 @@ namespace SiaeBridge
                         mimeBuilder.Append(smimeBody ?? "SIAE RCA Transmission");
                         mimeBuilder.Append("\r\n\r\n");
                         
-                        // Parte allegato P7M
+                        // Parte allegato P7M - usa application/octet-stream per file binari firmati
                         mimeBuilder.Append($"--{boundary}\r\n");
-                        mimeBuilder.Append($"Content-Type: application/pkcs7-mime; name=\"{attachmentName}\"\r\n");
+                        mimeBuilder.Append($"Content-Type: application/octet-stream; name=\"{attachmentName}\"\r\n");
                         mimeBuilder.Append("Content-Transfer-Encoding: base64\r\n");
                         mimeBuilder.Append($"Content-Disposition: attachment; filename=\"{attachmentName}\"\r\n");
                         mimeBuilder.Append("\r\n");
@@ -2105,7 +2130,7 @@ namespace SiaeBridge
                     }
                     else
                     {
-                        // Email senza allegato - text/plain
+                        // Email senza allegato - text/plain (SENZA header From/To/Subject)
                         mimeBuilder.Append("Content-Type: text/plain; charset=utf-8\r\n");
                         mimeBuilder.Append("Content-Transfer-Encoding: 8bit\r\n");
                         mimeBuilder.Append("\r\n");
@@ -2114,7 +2139,7 @@ namespace SiaeBridge
                     }
                     
                     mimeContent = mimeBuilder.ToString();
-                    Log($"  Built MIME content from SMIMESignML params: {mimeContent.Length} bytes");
+                    Log($"  Built MIME body (without external headers) for signing: {mimeContent.Length} bytes");
                 }
 
                 if (string.IsNullOrEmpty(mimeContent))
@@ -2287,47 +2312,24 @@ namespace SiaeBridge
                 string smimeBoundary = $"----=_smime_{Guid.NewGuid():N}";
                 string p7sBase64 = Convert.ToBase64String(p7sBytes);
 
-                // Estrai gli header esterni dal messaggio MIME originale
-                // Gli header esterni NON fanno parte della firma S/MIME - sono per il client email
-                string normalizedMime = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
+                // Il mimeContent costruito sopra NON contiene header From/To/Subject
+                // È già il body MIME puro che è stato firmato da PKCS7SignML
+                // Lo normalizziamo solo per garantire line endings corretti
+                string bodyMime = mimeContent.Replace("\r\n", "\n").Replace("\n", "\r\n");
                 
-                string externalFrom = "";
-                string externalTo = "";
-                string externalSubject = "";
-                string bodyMime = normalizedMime;
-                
-                // Cerca e estrai gli header principali dal messaggio originale
-                var lines = normalizedMime.Split(new[] { "\r\n" }, StringSplitOptions.None);
-                int headerEndIndex = 0;
-                for (int i = 0; i < lines.Length; i++)
-                {
-                    var line = lines[i];
-                    if (string.IsNullOrEmpty(line))
-                    {
-                        // Fine degli header
-                        headerEndIndex = i;
-                        break;
-                    }
-                    
-                    if (line.StartsWith("From:", StringComparison.OrdinalIgnoreCase))
-                        externalFrom = line;
-                    else if (line.StartsWith("To:", StringComparison.OrdinalIgnoreCase))
-                        externalTo = line;
-                    else if (line.StartsWith("Subject:", StringComparison.OrdinalIgnoreCase))
-                        externalSubject = line;
-                }
-                
-                Log($"  External headers: From={!string.IsNullOrEmpty(externalFrom)}, To={!string.IsNullOrEmpty(externalTo)}, Subject={!string.IsNullOrEmpty(externalSubject)}");
+                Log($"  Building S/MIME message: From={!string.IsNullOrEmpty(externalFrom)}, To={!string.IsNullOrEmpty(externalTo)}, Subject={!string.IsNullOrEmpty(externalSubject)}");
+                Log($"  Body MIME size: {bodyMime.Length} bytes (this is what was signed)");
 
                 var smimeBuilder = new StringBuilder();
                 
                 // PRIMA: Header esterni (visibili al client email, NON firmati)
+                // Questi provengono dalle variabili salvate quando abbiamo costruito mimeContent
                 if (!string.IsNullOrEmpty(externalFrom))
-                    smimeBuilder.Append($"{externalFrom}\r\n");
+                    smimeBuilder.Append($"From: {externalFrom}\r\n");
                 if (!string.IsNullOrEmpty(externalTo))
-                    smimeBuilder.Append($"{externalTo}\r\n");
+                    smimeBuilder.Append($"To: {externalTo}\r\n");
                 if (!string.IsNullOrEmpty(externalSubject))
-                    smimeBuilder.Append($"{externalSubject}\r\n");
+                    smimeBuilder.Append($"Subject: {externalSubject}\r\n");
                 
                 // DOPO: Header MIME per multipart/signed
                 smimeBuilder.Append("MIME-Version: 1.0\r\n");
@@ -2335,9 +2337,10 @@ namespace SiaeBridge
                 smimeBuilder.Append("\r\n");
                 smimeBuilder.Append($"--{smimeBoundary}\r\n");
                 
-                // Aggiungi il contenuto MIME originale (questo è il contenuto FIRMATO)
-                smimeBuilder.Append(normalizedMime);
-                if (!normalizedMime.EndsWith("\r\n"))
+                // Aggiungi il body MIME - questo è ESATTAMENTE il contenuto che è stato firmato
+                // CRITICO: bodyMime deve essere identico a ciò che è stato scritto in inputFile per PKCS7SignML
+                smimeBuilder.Append(bodyMime);
+                if (!bodyMime.EndsWith("\r\n"))
                     smimeBuilder.Append("\r\n");
                 
                 smimeBuilder.Append("\r\n");
