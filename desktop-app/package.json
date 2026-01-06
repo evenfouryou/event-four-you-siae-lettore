@@ -1,6 +1,6 @@
 {
   "name": "event-four-you-siae-lettore",
-  "version": "3.16.3",
+  "version": "3.24.0",
   "description": "Event Four You - SIAE Lettore per smart card MiniLector EVO V3",
   "main": "main.js",
   "author": "Event Four You",
@@ -25,7 +25,7 @@
   "build": {
     "appId": "com.eventfouryou.siae-lettore",
     "productName": "Event Four You SIAE Lettore",
-    "copyright": "Copyright © 2024 Event Four You",
+    "copyright": "Copyright © 2025 Event Four You",
     "win": {
       "target": [
         {
@@ -33,7 +33,7 @@
           "arch": ["x64"]
         }
       ],
-      "icon": "../icon.png",
+      "icon": "icon.ico",
       "publisherName": "Event Four You"
     },
     "nsis": {
@@ -50,6 +50,7 @@
       "renderer.js",
       "styles.css",
       "icon.ico",
+      "icon.png",
       "node_modules/**/*"
     ],
     "extraResources": [
