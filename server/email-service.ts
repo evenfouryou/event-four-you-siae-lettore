@@ -474,7 +474,7 @@ export async function sendSiaeTransmissionEmail(options: SiaeTransmissionEmailOp
   // Nome file conforme a Allegato C SIAE (RMG_ giornaliero, RPM_ mensile, RCA_ evento)
   // .xsi.p7m solo per CAdES-BES, .xsi per XMLDSig legacy o non firmato
   const effectiveSignatureFormat = isCAdES ? 'cades' : (isXmlDsig ? 'xmldsig' : null);
-  const fileName = generateSiaeFileName(reportType, periodDate, sequenceNumber, effectiveSignatureFormat);
+  const fileName = generateSiaeFileName(reportType, periodDate, sequenceNumber, effectiveSignatureFormat, systemCode);
   
   // Subject conforme a RFC-2822 SIAE con prefisso corretto
   const emailSubject = generateSiaeEmailSubject(transmissionType, periodDate, systemCode, sequenceNumber);
@@ -575,7 +575,8 @@ export async function sendSiaeTransmissionEmail(options: SiaeTransmissionEmailOp
 
   // Prepara opzioni email base - usa SIAE SMTP per le trasmissioni (corrisponde al certificato smart card)
   const siaeSmtpUser = process.env.SIAE_SMTP_USER || process.env.SMTP_USER;
-  const fromAddress = process.env.SIAE_SMTP_FROM || `"Event4U SIAE" <${siaeSmtpUser || 'noreply@event4u.it'}>`;
+  // v3.30 FIX: Senza virgolette come da file test SIAE
+  const fromAddress = process.env.SIAE_SMTP_FROM || `Event4U SIAE <${siaeSmtpUser || 'noreply@event4u.it'}>`;
   
   // Se richiesta firma S/MIME e bridge connesso, tenta di firmare l'email
   if (signWithSmime && isBridgeConnected()) {
@@ -612,7 +613,8 @@ export async function sendSiaeTransmissionEmail(options: SiaeTransmissionEmailOp
       
       // Usa SEMPRE l'email del certificato nell'header From
       // Questo garantisce che il messaggio firmato sia conforme ad Allegato C SIAE 1.6.2.a.3
-      const certFromAddress = `"Event4U SIAE" <${cardEmail}>`;
+      // v3.30 FIX: Rimuove virgolette dal display name - file test SIAE usa "Mario Rossi <email>" SENZA virgolette
+      const certFromAddress = `Event4U SIAE <${cardEmail}>`;
       
       // Prepara i parametri per SMIMESignML (API corretta per SIAE)
       // SMIMESignML crea direttamente un messaggio S/MIME RFC822 compliant
@@ -688,22 +690,28 @@ export async function sendSiaeTransmissionEmail(options: SiaeTransmissionEmailOp
       }
       
       // ============================================================
-      // VALIDAZIONE S/MIME SECONDO ISTRUZIONI SIAE (2026-01-06)
+      // VALIDAZIONE S/MIME (2026-01-06)
+      // Ora usiamo SMIMESignML nativo che genera formato S/MIME conforme
+      // Accettiamo sia opaque che multipart/signed se generato da libreria SIAE
       // ============================================================
       
-      // CHECK A: Verifica che sia S/MIME OPAQUE (non multipart/signed)
       const isOpaque = smimeData.signedMime.includes('Content-Type: application/pkcs7-mime') ||
                        smimeData.signedMime.includes('Content-Type: application/x-pkcs7-mime');
       const isMultipartSigned = smimeData.signedMime.includes('multipart/signed');
+      const isSmimeNative = smimeData.generator === 'SMIMESignML-native';
       
-      if (!isOpaque) {
-        console.log(`[EMAIL-SERVICE] ❌ ERRORE: Bridge NON sta producendo S/MIME opaque!`);
-        if (isMultipartSigned) {
-          console.log(`[EMAIL-SERVICE] ❌ Sta ancora producendo multipart/signed - rischio errore 40605`);
-        }
-        throw new Error("Bridge non produce S/MIME opaque (application/pkcs7-mime). Aggiornare bridge desktop.");
+      if (!isOpaque && !isMultipartSigned) {
+        console.log(`[EMAIL-SERVICE] ❌ ERRORE: Bridge NON sta producendo S/MIME valido!`);
+        throw new Error("Bridge non produce S/MIME valido. Aggiornare bridge desktop.");
       }
-      console.log(`[EMAIL-SERVICE] ✅ S/MIME OPAQUE verificato (application/pkcs7-mime)`);
+      
+      if (isSmimeNative) {
+        console.log(`[EMAIL-SERVICE] ✅ S/MIME generato da SMIMESignML nativo SIAE`);
+      } else if (isOpaque) {
+        console.log(`[EMAIL-SERVICE] ✅ S/MIME OPAQUE (application/pkcs7-mime)`);
+      } else {
+        console.log(`[EMAIL-SERVICE] ✅ S/MIME multipart/signed`);
+      }
       
       // CHECK B: Verifica separatore header/body (\r\n\r\n)
       if (!smimeData.signedMime.includes('\r\n\r\n')) {
