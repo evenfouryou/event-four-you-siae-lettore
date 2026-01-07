@@ -1,6 +1,6 @@
 {
   "name": "event-four-you-siae-lettore",
-  "version": "3.29.0",
+  "version": "3.38.0",
   "description": "Event Four You - SIAE Lettore per smart card MiniLector EVO V3",
   "main": "main.js",
   "author": "Event Four You",
@@ -11,7 +11,7 @@
   },
   "scripts": {
     "start": "electron .",
-    "build": "electron-builder --win",
+    "build": "electron-builder --win --ia32",
     "postinstall": "electron-builder install-app-deps"
   },
   "dependencies": {
@@ -30,7 +30,7 @@
       "target": [
         {
           "target": "nsis",
-          "arch": ["x64"]
+          "arch": ["ia32"]
         }
       ],
       "icon": "icon.png",
