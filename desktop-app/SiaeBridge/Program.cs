@@ -141,7 +141,7 @@ namespace SiaeBridge
             try { _log = new StreamWriter(logPath, true) { AutoFlush = true }; } catch { }
 
             Log("═══════════════════════════════════════════════════════");
-            Log("SiaeBridge v3.40 - FIX: Restore csproj to v3.16.3 (working version)");
+            Log("SiaeBridge v3.41 - FIX: Scan ALL 16 slots (no early exit)");
             Log($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
             Log($"32-bit Process: {!Environment.Is64BitProcess}");
@@ -377,9 +377,8 @@ namespace SiaeBridge
 
             try
             {
-                int consecutiveZeros = 0;
-                const int MAX_CONSECUTIVE_ZEROS = 3; // Stop after 3 consecutive zeros (likely no more readers)
-                
+                // v3.40 FIX: Scan ALL 16 slots without early exit
+                // BIT4ID readers may enumerate at slot >= 3
                 // First pass: scan using isCardIn
                 for (int s = 0; s < 16; s++)
                 {
@@ -391,20 +390,9 @@ namespace SiaeBridge
 
                         if (state <= 0)
                         {
-                            consecutiveZeros++;
-                            Log($"  Slot {s}: no card or no reader (consecutive zeros: {consecutiveZeros})");
-                            
-                            // Continue scanning a few more slots before giving up
-                            if (consecutiveZeros >= MAX_CONSECUTIVE_ZEROS)
-                            {
-                                Log($"  Reached {MAX_CONSECUTIVE_ZEROS} consecutive zeros, stopping isCardIn scan");
-                                break;
-                            }
-                            continue; // Try next slot instead of breaking
+                            Log($"  Slot {s}: no card or no reader");
+                            continue; // Try next slot
                         }
-
-                        // Reset consecutive zero counter
-                        consecutiveZeros = 0;
 
                         // state > 0 means card is present (libSIAE returns SCARD_STATE_PRESENT = 32)
                         Log($"  ✓ CARTA PRESENTE in slot {s}!");
