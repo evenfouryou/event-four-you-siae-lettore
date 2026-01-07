@@ -168,8 +168,22 @@ jobs:
           # Use version + run_number for unique tags
           echo "VERSION=v$($pkg.version).${{ github.run_number }}" >> $env:GITHUB_OUTPUT
 
+      - name: Find installer
+        id: find_installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path "desktop-app/dist" -Filter "*.exe" | Where-Object { $_.Name -like "*Setup*" } | Select-Object -First 1
+          if ($installer) {
+            echo "INSTALLER_PATH=$($installer.FullName)" >> $env:GITHUB_OUTPUT
+            echo "INSTALLER_NAME=$($installer.Name)" >> $env:GITHUB_OUTPUT
+            Write-Host "Found installer: $($installer.Name)"
+          } else {
+            Write-Host "No installer found!"
+            exit 1
+          }
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.get_version.outputs.VERSION }}
           make_latest: true
@@ -177,17 +191,16 @@ jobs:
           body: |
             ## Event Four You SIAE Lettore ${{ steps.get_version.outputs.VERSION }}
             
-            ### Novità:
-            - Firma digitale CAdES-BES conforme ETSI EN 319 122-1
-            - SHA-256 invece di SHA-1 deprecato
-            - SigningCertificateV2 per SIAE 2025
-            - Self-contained build con .NET 8.0 runtime incluso
+            ### Novità v3.49:
+            - Fix copia file per PowerShell 7
+            - Rilevazione carta migliorata (scan 16 slot)
+            - Firma digitale CAdES-BES conforme SIAE
             
             ### Installazione:
             1. Scarica il file .exe
             2. Esegui l'installer
             3. Avvia dal menu Start
-          files: desktop-app/dist/*.exe
-          generate_release_notes: false
+          files: ${{ steps.find_installer.outputs.INSTALLER_PATH }}
+          fail_on_unmatched_files: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
