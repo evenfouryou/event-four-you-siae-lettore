@@ -27,6 +27,20 @@ jobs:
         with:
           dotnet-version: '8.0.x'
           
+      - name: Get version from Program.cs
+        id: version
+        shell: pwsh
+        run: |
+          $content = Get-Content -Path "SiaeBridge/Program.cs" -Raw
+          if ($content -match 'SiaeBridge v(\d+\.\d+)') {
+            $version = $matches[1]
+            echo "VERSION=$version" >> $env:GITHUB_OUTPUT
+            Write-Host "Detected version: $version"
+          } else {
+            echo "VERSION=3.36" >> $env:GITHUB_OUTPUT
+            Write-Host "Using default version: 3.36"
+          }
+          
       - name: Build SiaeBridge
         run: |
           cd SiaeBridge
@@ -61,5 +75,21 @@ jobs:
         uses: softprops/action-gh-release@v1
         if: github.ref == 'refs/heads/main'
         with:
-          tag_name: v3.35.${{ github.run_number }}
-          name: v
+          tag_name: v${{ steps.version.outputs.VERSION }}.${{ github.run_number }}
+          name: Release v${{ steps.version.outputs.VERSION }}.${{ github.run_number }}
+          body: |
+            ## SIAE Lettore v${{ steps.version.outputs.VERSION }}
+            
+            Applicazione desktop per gestione smart card SIAE.
+            
+            ### Novita v3.36
+            - Fix rilevamento smart card migliorato
+            - Scansione tutti gli slot con fallback Initialize()
+            
+            ### Requisiti
+            - Windows 10/11 x86/x64
+            - Lettore smart card SIAE
+          files: desktop-app/dist/*.exe
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
