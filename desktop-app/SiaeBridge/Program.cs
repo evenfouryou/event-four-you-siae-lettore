@@ -141,7 +141,7 @@ namespace SiaeBridge
             try { _log = new StreamWriter(logPath, true) { AutoFlush = true }; } catch { }
 
             Log("═══════════════════════════════════════════════════════");
-            Log("SiaeBridge v3.41 - FIX: Scan ALL 16 slots (no early exit)");
+            Log("SiaeBridge v3.42 - FIX: Restored v3.16.3 IsCardPresent logic");
             Log($"Time: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Log($"Dir: {AppDomain.CurrentDomain.BaseDirectory}");
             Log($"32-bit Process: {!Environment.Is64BitProcess}");
@@ -377,24 +377,29 @@ namespace SiaeBridge
 
             try
             {
-                // v3.40 FIX: Scan ALL 16 slots without early exit
-                // BIT4ID readers may enumerate at slot >= 3
-                // First pass: scan using isCardIn
+                // v3.41 FIX: Restored v3.16.3 logic exactly
+                // isCardIn returns: 0=no reader, 16=EMPTY, 32=PRESENT
                 for (int s = 0; s < 16; s++)
                 {
                     try
                     {
                         int state = isCardIn(s);
                         string decoded = DecodeCardState(state);
-                        Log($"  isCardIn({s}) = {state} (0x{state:X4}) = {decoded}");
+                        Log($"  isCardIn({s}) = {state} (0x{state:X2}) = {decoded}");
 
-                        if (state <= 0)
+                        if (state == 0)
                         {
-                            Log($"  Slot {s}: no card or no reader");
-                            continue; // Try next slot
+                            // No more readers at this slot
+                            break;
                         }
 
-                        // state > 0 means card is present (libSIAE returns SCARD_STATE_PRESENT = 32)
+                        if (!IsCardPresent(state))
+                        {
+                            // Reader present but no card (state=16 EMPTY)
+                            continue;
+                        }
+
+                        // Card is present! (state & 32 != 0)
                         Log($"  ✓ CARTA PRESENTE in slot {s}!");
 
                         // Reset card state before initialize
