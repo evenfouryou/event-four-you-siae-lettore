@@ -10,16 +10,28 @@ on:
 jobs:
   build:
     runs-on: windows-latest
+    
     steps:
     - uses: actions/checkout@v4
+    
     - name: Setup .NET
       uses: actions/setup-dotnet@v4
       with:
         dotnet-version: '8.0.x'
+    
+    - name: Restore dependencies
+      run: dotnet restore desktop-app/SiaeBridge/SiaeBridge.csproj
+    
     - name: Build
-      run: dotnet publish desktop-app/SiaeBridge/SiaeBridge.csproj -c Release -r win-x64 --self-contained -o ./publish
+      run: dotnet publish desktop-app/SiaeBridge/SiaeBridge.csproj -c Release -r win-x86 --self-contained -o ./publish
+    
+    - name: Copy SIAE DLLs
+      run: |
+        copy desktop-app\SiaeBridge\prebuilt\libSIAE.dll publish\
+        copy desktop-app\SiaeBridge\prebuilt\libSIAEp7.dll publish\
+    
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: SiaeBridge-win-x64
+        name: SiaeBridge-win-x86
         path: ./publish/
