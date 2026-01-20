@@ -23,7 +23,7 @@ jobs:
     - name: Build SiaeBridge
       run: |
         cd SiaeBridge
-        dotnet publish -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o ../resources/SiaeBridge
+        dotnet publish -c Release -r win-x86 --self-contained true -o ../resources/SiaeBridge
       shell: pwsh
     
     - name: Copy prebuilt DLLs
